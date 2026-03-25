@@ -40,7 +40,7 @@ hf auth login
 # accept terms: https://huggingface.co/nvidia/Cosmos-Predict2-2B-Video2World/tree/main
 # can ignore Llama Guardrail errors
 
-python scripts/download_checkpoints.py --model_types video2world --model_sizes 2B
+python scripts/download_checkpoints.py --model_types video2world --model_sizes 2B --resolution 480 --fps 10
 ```
 
 4. download libero dataset (~27 GB)
