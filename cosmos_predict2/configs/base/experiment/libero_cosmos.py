@@ -28,7 +28,6 @@ libero_cosmos_dataset_train = L(Dataset)(
     dataset_dir="datasets/libero_cosmos_mp4/train",
     num_frames=93,
     video_size=(256, 256),
-    num_workers=8,
 )
 libero_cosmos_dataset_val = L(Dataset)(
     dataset_dir="datasets/libero_cosmos_mp4/val",
