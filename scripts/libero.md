@@ -7,7 +7,7 @@ Based on [mimic-video](https://arxiv.org/abs/2512.15692) Table IV hyperparameter
 
 1. clone repo
 ```
-git clone https://github.com/nvidia-cosmos/cosmos-predict2
+git clone -b libero https://github.com/ETHRoboticsClub/cosmos-predict2.git
 ```
 
 2. install
