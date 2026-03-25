@@ -70,16 +70,20 @@ python -m scripts.get_t5_embeddings --dataset_path datasets/libero_cosmos_mp4/va
 7. (optional) set up W&B logging
 ```
 pip install wandb
-wandb login   # paste API key from wandb.ai/settings
-export WANDB_API_KEY=<your_key>
-export WANDB_PROJECT=cosmos-libero   # project name in W&B
+export WANDB_API_KEY=<your_key>      # from wandb.ai/settings
+export WANDB_PROJECT=cosmos-libero
 ```
 training will log `train/loss` and `clip_grad_norm/{image,video}` to W&B.
 omit `WANDB_API_KEY` to skip W&B entirely (stdout only).
 
 8. train (8× GPU, p4de.24xlarge recommended)
 ```
-IMAGINAIRE_OUTPUT_ROOT=outputs bash scripts/train_libero_cosmos.sh
+IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
+  --nproc_per_node=8 \
+  --master_port=12341 \
+  -m scripts.train \
+  --config=cosmos_predict2/configs/base/config.py -- \
+  experiment=predict2_video2world_training_2b_libero_cosmos
 ```
 checkpoints saved every 500 steps to:
 `outputs/posttraining/video2world_lora/2b_libero_cosmos/checkpoints/`
