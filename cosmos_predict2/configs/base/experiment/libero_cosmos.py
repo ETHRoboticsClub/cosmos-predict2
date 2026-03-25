@@ -5,6 +5,7 @@ from hydra.core.config_store import ConfigStore
 from megatron.core import parallel_state
 from torch.utils.data import DataLoader, DistributedSampler
 
+from cosmos_predict2.callbacks.wandb_setup import WandbSetup
 from cosmos_predict2.data.dataset_video import Dataset
 from imaginaire.lazy_config import LazyCall as L
 
@@ -98,6 +99,7 @@ predict2_video2world_training_2b_libero_cosmos = dict(
         distributed_parallelism="fsdp",
         callbacks=dict(
             iter_speed=dict(hit_thres=10),
+            wandb_setup=L(WandbSetup)(),
         ),
         max_iter=7_000,
     ),
