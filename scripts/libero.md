@@ -76,7 +76,22 @@ export WANDB_PROJECT=cosmos-libero
 training will log `train/loss` and `clip_grad_norm/{image,video}` to W&B.
 omit `WANDB_API_KEY` to skip W&B entirely (stdout only).
 
-8. train (8× GPU, p4de.24xlarge recommended)
+8. smoke test (run before full training to verify W&B logging and validation work)
+```
+IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
+  --nproc_per_node=8 \
+  --master_port=12341 \
+  -m scripts.train \
+  --config=cosmos_predict2/configs/base/config.py -- \
+  experiment=predict2_video2world_training_2b_libero_cosmos \
+  trainer.max_iter=5 \
+  trainer.validation_iter=1 \
+  trainer.max_val_iter=2 \
+  checkpoint.save_iter=999999
+```
+confirms within a few minutes: `val/loss` and frame grids appear in W&B, no crashes.
+
+9. train (8× GPU, p4de.24xlarge recommended)
 ```
 IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
   --nproc_per_node=8 \
@@ -88,7 +103,7 @@ IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
 checkpoints saved every 500 steps to:
 `outputs/posttraining/video2world_lora/2b_libero_cosmos/checkpoints/`
 
-9. convert checkpoint for inference
+10. convert checkpoint for inference
 ```
 CKPT_DIR=outputs/posttraining/video2world_lora/2b_libero_cosmos/checkpoints
 ITER=$(cat $CKPT_DIR/latest_checkpoint.txt)
@@ -96,7 +111,7 @@ python convert_distcp.py $CKPT_DIR/$ITER/model $CKPT_DIR/$ITER
 ```
 produces `model_ema_bf16.pt`
 
-9. evaluate (base vs. fine-tuned, 5 val episodes)
+11. evaluate (base vs. fine-tuned, 5 val episodes)
 ```
 python scripts/eval_libero_cosmos.py --out eval/base
 python scripts/eval_libero_cosmos.py --out eval/finetuned \

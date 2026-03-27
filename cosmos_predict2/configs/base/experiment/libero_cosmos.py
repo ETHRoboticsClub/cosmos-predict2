@@ -5,6 +5,7 @@ from hydra.core.config_store import ConfigStore
 from megatron.core import parallel_state
 from torch.utils.data import DataLoader, DistributedSampler
 
+from cosmos_predict2.callbacks.every_n_draw_sample import EveryNDrawSample
 from cosmos_predict2.callbacks.wandb_setup import WandbSetup
 from cosmos_predict2.data.dataset_video import Dataset
 from imaginaire.lazy_config import LazyCall as L
@@ -99,8 +100,21 @@ predict2_video2world_training_2b_libero_cosmos = dict(
         callbacks=dict(
             iter_speed=dict(hit_thres=10),
             wandb_setup=L(WandbSetup)(),
+            draw_sample=L(EveryNDrawSample)(
+                every_n=500,
+                is_x0=True,
+                is_sample=False,# skip expensive 35-step sampling
+                is_ema=True,
+                n_x0_level=2,
+                n_viz_sample=1,
+                show_all_frames=False,
+                fps=10,
+            ),
         ),
         max_iter=7_000,
+        run_validation=True,
+        validation_iter=500,
+        max_val_iter=20,
     ),
     checkpoint=dict(
         save_iter=500,
