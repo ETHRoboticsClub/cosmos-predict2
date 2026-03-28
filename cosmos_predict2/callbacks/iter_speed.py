@@ -16,6 +16,7 @@
 import time
 
 import torch
+import wandb
 from torch import Tensor
 
 from imaginaire.callbacks.every_n import EveryN
@@ -77,6 +78,21 @@ class IterSpeed(EveryN):
         cur_time = time.time()
         iter_speed = (cur_time - self.time) / self.every_n / self.step_size
 
-        log.info(f"{iteration} : iter_speed {iter_speed:.2f} seconds per iteration | Loss: {loss.item():.4f}")
+        remaining_iters = self.config.trainer.max_iter - iteration
+        eta_hours = iter_speed * remaining_iters / 3600
+
+        log.info(
+            f"{iteration} : iter_speed {iter_speed:.2f} s/iter | "
+            f"ETA: {eta_hours:.1f}h | Loss: {loss.item():.4f}"
+        )
+
+        if wandb.run:
+            wandb.log(
+                {
+                    "trainer/iter_speed_s": iter_speed,
+                    "trainer/eta_hours": eta_hours,
+                },
+                step=iteration,
+            )
 
         self.time = cur_time

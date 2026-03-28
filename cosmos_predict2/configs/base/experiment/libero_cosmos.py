@@ -101,13 +101,13 @@ predict2_video2world_training_2b_libero_cosmos = dict(
             iter_speed=dict(hit_thres=10),
             wandb_setup=L(WandbSetup)(),
             draw_sample=L(EveryNDrawSample)(
-                every_n=500,
+                every_n=200,
                 is_x0=True,
                 is_sample=False,# skip expensive 35-step sampling
                 is_ema=True,
                 n_x0_level=2,
                 n_viz_sample=1,
-                show_all_frames=False,
+                show_all_frames=True,
                 fps=10,
             ),
         ),
