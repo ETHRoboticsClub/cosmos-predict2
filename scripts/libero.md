@@ -92,23 +92,29 @@ IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
   checkpoint.save_iter=999999
 ```
 
-**1× GPU (g6e.12xlarge / L40S 48 GB — reduced config):**
+**4× GPU (g6e.12xlarge / 4× L40S 48 GB — reduced config):**
+
+Requires pod spec to request 4 GPUs (`nvidia.com/gpu: 4`).
 ```
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
-  --nproc_per_node=1 \
+  --nproc_per_node=4 \
   --master_port=12341 \
   -m scripts.train \
   --config=cosmos_predict2/configs/base/config.py -- \
   experiment=predict2_video2world_training_2b_libero_cosmos \
-  model_parallel.context_parallel_size=1 \
+  model_parallel.context_parallel_size=2 \
   dataloader_train.batch_size=1 \
   dataloader_val.batch_size=1 \
   trainer.max_iter=5 \
   trainer.validation_iter=1 \
   trainer.max_val_iter=2 \
+  trainer.callbacks.draw_sample.every_n=1 \
   checkpoint.save_iter=999999
 ```
-`context_parallel_size=1` is required — the default of 2 will crash with a single GPU.
+With CP=2 and 4 GPUs there are 2 DP ranks. `batch_size=1` avoids OOM on L40S (44 GiB usable).
+Confirms within a few minutes: `val/loss` appears and frame grids are logged to W&B.
 
 confirms within a few minutes: `val/loss` and frame grids appear in W&B, no crashes.
 
