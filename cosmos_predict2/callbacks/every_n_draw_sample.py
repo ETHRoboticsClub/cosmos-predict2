@@ -98,6 +98,7 @@ class EveryNDrawSample(EveryN):
         self.num_sampling_step = num_sampling_step
         self.rank = distributed.get_rank()
         self.fps = fps
+        self._first_val_batch = None
 
     def on_train_start(self, model: ImaginaireModel, iteration: int = 0) -> None:
         config_job = self.config.job
@@ -117,6 +118,40 @@ class EveryNDrawSample(EveryN):
 
         # if self.use_negative_prompt:
         #     self.negative_prompt_data = easy_io.load(get_itemdataset_option("negative_prompt_v0_s3").path)
+
+    def on_validation_start(self, model: ImaginaireModel, dataloader_val, iteration: int = 0) -> None:
+        self._first_val_batch = None
+
+    @torch.no_grad()
+    def on_validation_step_end(
+        self,
+        model: ImaginaireModel,
+        data_batch: dict,
+        output_batch: dict,
+        loss,
+        iteration: int = 0,
+    ) -> None:
+        # Capture only the first val batch; we're already inside ema_scope from the trainer.
+        if self._first_val_batch is not None:
+            return
+        self._first_val_batch = data_batch
+        if not self.is_x0:
+            return
+        # ema_scope is already active — use nullcontext to avoid re-entering it.
+        x0_img_fp, mse_loss, sigmas = self.x0_pred(None, model, data_batch, output_batch, loss, iteration)
+        dist.barrier()
+        if wandb.run:
+            data_type = "image" if model.is_image_batch(data_batch) else "video"
+            tag = f"val_ema_{data_type}"
+            info = {
+                "trainer/global_step": iteration,
+                f"{self.name}/{tag}_x0": self._to_wandb_media(x0_img_fp, caption=str(iteration)),
+            }
+            mse_loss = mse_loss.tolist()
+            info.update({f"x0_pred_mse_{tag}/Sigma{sigmas[i]:0.5f}": mse_loss[i] for i in range(len(mse_loss))})
+            wandb.log(info, step=iteration)
+        torch.cuda.empty_cache()
+
 
     @misc.timer("EveryNDrawSample: x0")
     @torch.no_grad()
@@ -247,7 +282,7 @@ class EveryNDrawSample(EveryN):
                 "sample_counter": sample_counter,
             }
             if self.is_x0:
-                info[f"{self.name}/{tag}_x0"] = wandb.Image(x0_img_fp, caption=f"{sample_counter}")
+                info[f"{self.name}/{tag}_x0"] = self._to_wandb_media(x0_img_fp, caption=str(sample_counter))
                 # convert mse_loss to a dict
                 mse_loss = mse_loss.tolist()
                 info.update({f"x0_pred_mse_{tag}/Sigma{sigmas[i]:0.5f}": mse_loss[i] for i in range(len(mse_loss))})
@@ -311,7 +346,15 @@ class EveryNDrawSample(EveryN):
             return local_path
         return None
 
-    def run_save(self, to_show, batch_size, base_fp_wo_ext) -> str | None:
+    def _to_wandb_media(self, media: str | np.ndarray | None, caption: str = "") -> wandb.Image | wandb.Video | None:
+        """Return wandb.Image for JPEG paths, wandb.Video for numpy arrays."""
+        if isinstance(media, np.ndarray):
+            return wandb.Video(media, fps=self.fps, format="mp4")
+        if media is not None:
+            return wandb.Image(media, caption=caption)
+        return None
+
+    def run_save(self, to_show, batch_size, base_fp_wo_ext) -> str | np.ndarray | None:
         to_show = (1.0 + torch.stack(to_show, dim=0).clamp(-1, 1)) / 2.0  # [n, b, c, t, h, w]
         is_single_frame = to_show.shape[3] == 1
         n_viz_sample = min(self.n_viz_sample, batch_size)
@@ -324,38 +367,24 @@ class EveryNDrawSample(EveryN):
                 fps=self.fps,
             )
 
-        file_base_fp = f"{base_fp_wo_ext}_resize.jpg"
-        local_path = f"{self.local_dir}/{file_base_fp}"
+        if not (self.rank == 0 and wandb.run):
+            return None
 
-        if self.rank == 0 and wandb.run:
-            if is_single_frame:  # image case
-                to_show = rearrange(
-                    to_show[:, :n_viz_sample],
-                    "n b c t h w -> t c (n h) (b w)",
-                )
-                image_grid = torchvision.utils.make_grid(to_show, nrow=1, padding=0, normalize=False)
-                # resize so that wandb can handle it
-                torchvision.utils.save_image(resize_image(image_grid, 1024), local_path, nrow=1, scale_each=True)
+        to_show = to_show[:, :n_viz_sample]
+
+        if is_single_frame or not self.show_all_frames:
+            # 3-frame grid (or single image) → JPEG
+            if not is_single_frame:
+                _T = to_show.shape[3]
+                to_show = to_show[:, :, :, [0, _T // 2, _T - 1]]
+                to_show = rearrange(to_show, "n b c t h w -> 1 c (n h) (b t w)")
             else:
-                to_show = to_show[:, :n_viz_sample]  # [n, b, c, 3, h, w]
-                if not self.show_all_frames:
-                    # resize 3 frames frames so that we can display them on wandb
-                    _T = to_show.shape[3]
-                    three_frames_list = [0, _T // 2, _T - 1]
-                    to_show = to_show[:, :, :, three_frames_list]
-                    log_image_size = 1024
-                else:
-                    log_image_size = 512 * to_show.shape[3]
-                to_show = rearrange(
-                    to_show,
-                    "n b c t h w -> 1 c (n h) (b t w)",
-                )
-
-                # resize so that wandb can handle it
-                image_grid = torchvision.utils.make_grid(to_show, nrow=1, padding=0, normalize=False)
-                torchvision.utils.save_image(
-                    resize_image(image_grid, log_image_size), local_path, nrow=1, scale_each=True
-                )
-
+                to_show = rearrange(to_show, "n b c t h w -> t c (n h) (b w)")
+            image_grid = torchvision.utils.make_grid(to_show, nrow=1, padding=0, normalize=False)
+            local_path = f"{self.local_dir}/{base_fp_wo_ext}_resize.jpg"
+            torchvision.utils.save_image(resize_image(image_grid, 1024), local_path, nrow=1, scale_each=True)
             return local_path
-        return None
+        else:
+            # All frames → video array [t, (n*h), (b*w), c] uint8
+            video = rearrange(to_show, "n b c t h w -> t (n h) (b w) c")
+            return (video * 255).byte().numpy()

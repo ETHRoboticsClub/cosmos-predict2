@@ -63,6 +63,9 @@ dataloader_val_libero_cosmos = L(DataLoader)(
 # Hyperparams from mimic-video paper (Table IV):
 #   - Video backbone finetuning: 7k steps, lr=1.778e-4, batch=128, warmup=1000 steps
 #   - Model: Cosmos-Predict2 2B, 480p, 10fps single-view
+# Frequency (steps) for both validation and draw_sample visualization — keep in sync.
+_VIZ_EVERY_N = 200
+
 predict2_video2world_training_2b_libero_cosmos = dict(
     defaults=[
         {"override /model": "predict2_video2world_fsdp_2b_480p_10fps"},  # 480p 10fps variant
@@ -101,19 +104,19 @@ predict2_video2world_training_2b_libero_cosmos = dict(
             iter_speed=dict(hit_thres=10),
             wandb_setup=L(WandbSetup)(),
             draw_sample=L(EveryNDrawSample)(
-                every_n=200,
+                every_n=_VIZ_EVERY_N,
                 is_x0=True,
                 is_sample=False,# skip expensive 35-step sampling
                 is_ema=True,
                 n_x0_level=2,
                 n_viz_sample=1,
-                show_all_frames=True,
+                show_all_frames=False,
                 fps=10,
             ),
         ),
         max_iter=7_000,
         run_validation=True,
-        validation_iter=500,
+        validation_iter=_VIZ_EVERY_N,
         max_val_iter=20,
     ),
     checkpoint=dict(
