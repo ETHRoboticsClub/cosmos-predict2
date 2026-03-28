@@ -165,7 +165,7 @@ class EveryNDrawSample(EveryN):
     @torch.no_grad()
     def every_n_impl(self, trainer, model, data_batch, output_batch, loss, iteration):
         if self.is_ema:
-            if not model.config.ema.enabled:
+            if not model.config.pipe_config.ema.enabled:
                 return
             context = partial(model.ema_scope, "every_n_sampling")
         else:
