@@ -28,6 +28,7 @@ import wandb
 from einops import rearrange, repeat
 from megatron.core import parallel_state
 
+from cosmos_predict2.utils.context_parallel import cat_outputs_cp
 from imaginaire.callbacks.every_n import EveryN
 from imaginaire.model import ImaginaireModel
 from imaginaire.utils import distributed, log, misc
@@ -153,7 +154,9 @@ class EveryNDrawSample(EveryN):
             log.debug(f"done denoising {sigma}", rank0_only=False)
             mse_loss = distributed.dist_reduce_tensor(F.mse_loss(sample, x0))
             mse_loss_list.append(mse_loss)
-            # TODO: (qsh 2025-02-25) buggy for cp code. need to gather before decode if we split xt
+            # Gather CP-split latent from all ranks before decoding to reconstruct the full video.
+            if model.pipe.dit.is_context_parallel_enabled:
+                sample = cat_outputs_cp(sample, seq_dim=2, cp_group=model.pipe.get_context_parallel_group())
             if hasattr(model.pipe, "decode"):
                 sample = model.pipe.decode(sample)
             to_show.append(sample.float().cpu())
