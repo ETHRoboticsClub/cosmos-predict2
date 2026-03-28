@@ -110,7 +110,6 @@ IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
   trainer.max_iter=5 \
   trainer.validation_iter=1 \
   trainer.max_val_iter=2 \
-  trainer.callbacks.draw_sample.every_n=1 \
   checkpoint.save_iter=999999
 ```
 With CP=2 and 4 GPUs there are 2 DP ranks. `batch_size=1` avoids OOM on L40S (44 GiB usable).
