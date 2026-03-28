@@ -77,6 +77,8 @@ training will log `train/loss` and `clip_grad_norm/{image,video}` to W&B.
 omit `WANDB_API_KEY` to skip W&B entirely (stdout only).
 
 8. smoke test (run before full training to verify W&B logging and validation work)
+
+**8× GPU (p4de.24xlarge — full config):**
 ```
 IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
   --nproc_per_node=8 \
@@ -89,6 +91,25 @@ IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
   trainer.max_val_iter=2 \
   checkpoint.save_iter=999999
 ```
+
+**1× GPU (g6e.12xlarge / L40S 48 GB — reduced config):**
+```
+IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
+  --nproc_per_node=1 \
+  --master_port=12341 \
+  -m scripts.train \
+  --config=cosmos_predict2/configs/base/config.py -- \
+  experiment=predict2_video2world_training_2b_libero_cosmos \
+  model_parallel.context_parallel_size=1 \
+  dataloader_train.batch_size=1 \
+  dataloader_val.batch_size=1 \
+  trainer.max_iter=5 \
+  trainer.validation_iter=1 \
+  trainer.max_val_iter=2 \
+  checkpoint.save_iter=999999
+```
+`context_parallel_size=1` is required — the default of 2 will crash with a single GPU.
+
 confirms within a few minutes: `val/loss` and frame grids appear in W&B, no crashes.
 
 9. train (8× GPU, p4de.24xlarge recommended)
