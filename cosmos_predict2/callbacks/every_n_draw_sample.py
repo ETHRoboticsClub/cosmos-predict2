@@ -127,13 +127,17 @@ class EveryNDrawSample(EveryN):
         log.debug("starting data and condition model", rank0_only=False)
         # TODO: (qsh 2024-07-01) this may be problematic due to sometimes we have uncondition, some times we have condition due to cfg dropout
         # TODO: (qsh 2025-02-25) we need to broadcast raw_data for correct visualization
-        raw_data, x0, condition = model.get_data_and_condition(data_batch)
-        _, condition, x0, _ = model.broadcast_split_for_model_parallelsim(None, condition, x0, None)
+        raw_data, x0, condition = model.pipe.get_data_and_condition(data_batch)
+        _, condition, x0, _ = model.pipe.broadcast_split_for_model_parallelsim(None, condition, x0, None)
 
         log.debug("done data and condition model", rank0_only=False)
         batch_size = x0.shape[0]
         sigmas = np.exp(
-            np.linspace(math.log(model.sde.sigma_min), math.log(model.sde.sigma_max), self.n_x0_level + 1)[1:]
+            np.linspace(
+                math.log(model.pipe.scheduler.config.sigma_min),
+                math.log(model.pipe.scheduler.config.sigma_max),
+                self.n_x0_level + 1,
+            )[1:]
         )
 
         to_show = []
@@ -145,13 +149,13 @@ class EveryNDrawSample(EveryN):
         for _, sigma in enumerate(sigmas):
             x_sigma = sigma * random_noise + x0
             log.debug(f"starting denoising {sigma}", rank0_only=False)
-            sample = model.denoise(x_sigma, _ones * sigma, condition).x0
+            sample = model.pipe.denoise(x_sigma, _ones * sigma, condition).x0
             log.debug(f"done denoising {sigma}", rank0_only=False)
             mse_loss = distributed.dist_reduce_tensor(F.mse_loss(sample, x0))
             mse_loss_list.append(mse_loss)
             # TODO: (qsh 2025-02-25) buggy for cp code. need to gather before decode if we split xt
-            if hasattr(model, "decode"):
-                sample = model.decode(sample)
+            if hasattr(model.pipe, "decode"):
+                sample = model.pipe.decode(sample)
             to_show.append(sample.float().cpu())
         to_show.append(
             raw_data.float().cpu(),
@@ -167,7 +171,7 @@ class EveryNDrawSample(EveryN):
         if self.is_ema:
             if not model.config.pipe_config.ema.enabled:
                 return
-            context = partial(model.ema_scope, "every_n_sampling")
+            context = partial(model.pipe.ema_scope, "every_n_sampling")
         else:
             context = nullcontext
 
