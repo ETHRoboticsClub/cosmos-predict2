@@ -322,7 +322,8 @@ class EveryNDrawSample(EveryN):
             data_batch["neg_t5_text_mask"] = data_batch["t5_text_mask"]
 
         # Use only the first guidance value to avoid 4x cost (default list has 4 values).
-        guidance = self.guidance[0] if isinstance(self.guidance, (list, tuple)) else self.guidance
+        # self.guidance may be a Hydra ListConfig (not a plain list), so index then cast.
+        guidance = float(self.guidance[0]) if hasattr(self.guidance, "__getitem__") else float(self.guidance)
         # generate_samples_from_batch handles CP split/gather and decode internally.
         sample = model.pipe.generate_samples_from_batch(
             data_batch,
