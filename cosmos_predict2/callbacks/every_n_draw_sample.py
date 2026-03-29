@@ -340,13 +340,13 @@ class EveryNDrawSample(EveryN):
             return local_path
         return None
 
-    def _to_wandb_media(self, media: str | np.ndarray | None, caption: str = "") -> wandb.Image | wandb.Video | None:
-        """Return wandb.Image for JPEG paths, wandb.Video for numpy arrays."""
-        if isinstance(media, np.ndarray):
+    def _to_wandb_media(self, media: str | None, caption: str = "") -> wandb.Image | wandb.Video | None:
+        """Return wandb.Video for .mp4 paths, wandb.Image for all other paths."""
+        if media is None:
+            return None
+        if media.endswith(".mp4"):
             return wandb.Video(media, fps=self.fps, format="mp4")
-        if media is not None:
-            return wandb.Image(media, caption=caption)
-        return None
+        return wandb.Image(media, caption=caption)
 
     def run_save(self, to_show, batch_size, base_fp_wo_ext) -> str | np.ndarray | None:
         to_show = (1.0 + torch.stack(to_show, dim=0).clamp(-1, 1)) / 2.0  # [n, b, c, t, h, w]
@@ -379,6 +379,9 @@ class EveryNDrawSample(EveryN):
             torchvision.utils.save_image(resize_image(image_grid, 1024), local_path, nrow=1, scale_each=True)
             return local_path
         else:
-            # All frames → video array [t, (n*h), (b*w), c] uint8
+            # All frames → mp4 file (avoids moviepy dependency for wandb.Video)
             video = rearrange(to_show, "n b c t h w -> t (n h) (b w) c")
-            return (video * 255).byte().numpy()
+            video_uint8 = (video * 255).byte()
+            local_path = f"{self.local_dir}/{base_fp_wo_ext}.mp4"
+            torchvision.io.write_video(local_path, video_uint8, fps=self.fps)
+            return local_path
