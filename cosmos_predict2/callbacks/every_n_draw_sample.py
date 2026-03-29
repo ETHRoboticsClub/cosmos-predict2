@@ -146,7 +146,8 @@ class EveryNDrawSample(EveryN):
             mse_loss_list = mse_loss.tolist()
             info.update({f"x0_pred_mse_{tag}/Sigma{sigmas[i]:0.5f}": mse_loss_list[i] for i in range(len(mse_loss_list))})
 
-        if self.is_sample:
+        # Full diffusion sampling is expensive — only run at draw_sample frequency, not every validation.
+        if self.is_sample and iteration % self.every_n == 0:
             sample_img_fp = self.sample(None, model, data_batch, output_batch, loss, iteration)
             info[f"{self.name}/{tag}_sample"] = self._to_wandb_media(sample_img_fp, caption=str(iteration))
 
