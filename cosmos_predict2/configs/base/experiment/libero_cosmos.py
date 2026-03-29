@@ -36,13 +36,10 @@ libero_cosmos_dataset_val = L(Dataset)(
     video_size=(256, 256),
 )
 
-# Effective batch size = 128 (mimic-video paper).
-# With 8 GPUs and context_parallel_size=2, data-parallel ranks = 4.
-# Per-GPU batch size = 128 / 4 = 32. Adjust if using fewer GPUs.
 dataloader_train_libero_cosmos = L(DataLoader)(
     dataset=libero_cosmos_dataset_train,
     sampler=L(get_sampler)(dataset=libero_cosmos_dataset_train),
-    batch_size=32,
+    batch_size=4,
     drop_last=True,
     num_workers=4,
     pin_memory=True,
@@ -50,7 +47,7 @@ dataloader_train_libero_cosmos = L(DataLoader)(
 dataloader_val_libero_cosmos = L(DataLoader)(
     dataset=libero_cosmos_dataset_val,
     sampler=L(get_sampler)(dataset=libero_cosmos_dataset_val),
-    batch_size=32,
+    batch_size=4,
     drop_last=True,
     num_workers=4,
     pin_memory=True,
@@ -117,7 +114,7 @@ predict2_video2world_training_2b_libero_cosmos = dict(
         max_iter=7_000,
         run_validation=True,
         validation_iter=_VIZ_EVERY_N,
-        max_val_iter=20,
+        max_val_iter=10,
     ),
     checkpoint=dict(
         save_iter=500,

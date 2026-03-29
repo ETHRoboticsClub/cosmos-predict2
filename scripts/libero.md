@@ -118,30 +118,28 @@ Confirms within a few minutes: `val/loss` appears and frame grids are logged to 
 
 confirms within a few minutes: `val/loss` and frame grids appear in W&B, no crashes.
 
-9. train (8× GPU, p4de.24xlarge recommended)
+9. train (4× GPU, g6e.12xlarge / 4× L40S)
 ```
-IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
-  --nproc_per_node=8 \
+NPROC=4 IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
+  --nproc_per_node="${NPROC:-4}" \
   --master_port=12341 \
   -m scripts.train \
   --config=cosmos_predict2/configs/base/config.py -- \
   experiment=predict2_video2world_training_2b_libero_cosmos
 ```
+effective batch=8 (batch_size=4 × 2 DP ranks), lr=1.112e-5 (linear scaling from paper's batch=128)
 checkpoints saved every 500 steps to:
 `outputs/posttraining/video2world_lora/2b_libero_cosmos/checkpoints/`
 
-10. convert checkpoint for inference
+10. evaluate (base vs. fine-tuned, 5 val episodes)
+
+No checkpoint conversion needed — the eval script loads the trainer checkpoint directly.
 ```
 CKPT_DIR=outputs/posttraining/video2world_lora/2b_libero_cosmos/checkpoints
-ITER=$(cat $CKPT_DIR/latest_checkpoint.txt)
-python convert_distcp.py $CKPT_DIR/$ITER/model $CKPT_DIR/$ITER
-```
-produces `model_ema_bf16.pt`
+ITER=$(cat $CKPT_DIR/latest_checkpoint.txt)   # e.g. iter_000007000.pt
 
-11. evaluate (base vs. fine-tuned, 5 val episodes)
-```
 python scripts/eval_libero_cosmos.py --out eval/base
 python scripts/eval_libero_cosmos.py --out eval/finetuned \
-  --lora-checkpoint $CKPT_DIR/$ITER/model_ema_bf16.pt
+  --lora-checkpoint $CKPT_DIR/model/$ITER
 ```
 outputs `*_comparison.mp4` (ground truth | generated) for each episode

@@ -288,7 +288,7 @@ class EveryNDrawSample(EveryN):
                 info.update({f"x0_pred_mse_{tag}/Sigma{sigmas[i]:0.5f}": mse_loss[i] for i in range(len(mse_loss))})
 
             if self.is_sample:
-                info[f"{self.name}/{tag}_sample"] = wandb.Image(sample_img_fp, caption=f"{sample_counter}")
+                info[f"{self.name}/{tag}_sample"] = self._to_wandb_media(sample_img_fp, caption=str(sample_counter))
             wandb.log(
                 info,
                 step=iteration,
@@ -305,7 +305,7 @@ class EveryNDrawSample(EveryN):
             data_batch = misc.to(self.fix_batch, **model.tensor_kwargs)
 
         tag = "ema" if self.is_ema else "reg"
-        raw_data, x0, condition = model.get_data_and_condition(data_batch)
+        raw_data, x0, condition = model.pipe.get_data_and_condition(data_batch)
         if self.use_negative_prompt:
             batch_size = x0.shape[0]
             data_batch["neg_t5_text_embeddings"] = misc.to(
@@ -321,28 +321,22 @@ class EveryNDrawSample(EveryN):
             )
             data_batch["neg_t5_text_mask"] = data_batch["t5_text_mask"]
 
-        to_show = []
-        for guidance in self.guidance:
-            sample = model.generate_samples_from_batch(
-                data_batch,
-                guidance=guidance,
-                # make sure no mismatch and also works for cp
-                state_shape=x0.shape[1:],
-                n_sample=x0.shape[0],
-                num_steps=self.num_sampling_step,
-                is_negative_prompt=True if self.use_negative_prompt else False,
-            )
-            if hasattr(model, "decode"):
-                sample = model.decode(sample)
-            to_show.append(sample.float().cpu())
-
-        to_show.append(raw_data.float().cpu())
+        # Use only the first guidance value to avoid 4x cost (default list has 4 values).
+        guidance = self.guidance[0] if isinstance(self.guidance, (list, tuple)) else self.guidance
+        # generate_samples_from_batch handles CP split/gather and decode internally.
+        sample = model.pipe.generate_samples_from_batch(
+            data_batch,
+            guidance=guidance,
+            state_shape=x0.shape[1:],
+            n_sample=1,  # only one sample needed for visualization
+            num_steps=self.num_sampling_step,
+        )
+        to_show = [sample.float().cpu(), raw_data[:1].float().cpu()]
 
         base_fp_wo_ext = f"{tag}_ReplicateID{self.data_parallel_id:04d}_Sample_Iter{iteration:09d}"
 
-        batch_size = output_batch["x0"].shape[0]
         if is_tp_cp_pp_rank0():
-            local_path = self.run_save(to_show, batch_size, base_fp_wo_ext)
+            local_path = self.run_save(to_show, batch_size=1, base_fp_wo_ext=base_fp_wo_ext)
             return local_path
         return None
 
