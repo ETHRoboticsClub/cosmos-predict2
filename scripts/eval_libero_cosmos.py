@@ -4,8 +4,9 @@
 """
 Evaluate Cosmos Predict2 on LIBERO val episodes.
 
-Picks N random val videos, runs inference with 5 context frames (mimic-video paper),
-and saves a side-by-side comparison: ground truth (left) | generated (right).
+For each episode, runs two comparisons:
+  - from_start:  condition on first 5 frames, GT = first 93 frames
+  - from_middle: condition on 5 frames at the midpoint, GT = 93 frames from midpoint
 
 Run twice to compare base vs. fine-tuned:
 
@@ -14,13 +15,14 @@ Run twice to compare base vs. fine-tuned:
 
     # Fine-tuned LoRA
     python scripts/eval_libero_cosmos.py --out eval/finetuned \\
-        --lora-checkpoint /path/to/checkpoints/<iter>/model_ema_bf16.pt
+        --lora-checkpoint /path/to/checkpoints/model/<iter>.pt
 """
 
 import argparse
 import os
 import random
 import subprocess
+import tempfile
 from pathlib import Path
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -81,15 +83,45 @@ def load_pipeline(lora_checkpoint: str | None) -> Video2WorldPipeline:
     return pipe
 
 
-def save_gt_clip(src: Path, dst: Path, size: int = 480) -> None:
-    """Resize ground truth to match generated resolution for side-by-side."""
+def get_video_frame_count(path: Path) -> int:
+    """Return total frame count of a video file using ffprobe."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-count_packets", "-show_entries", "stream=nb_read_packets",
+            "-of", "csv=p=0", str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    return int(result.stdout.strip())
+
+
+def make_cond_clip(src: Path, dst: Path, start_frame: int, num_frames: int) -> None:
+    """Extract [start_frame, start_frame+num_frames) as a standalone clip for pipe() conditioning."""
     subprocess.run(
         [
             "ffmpeg", "-y", "-i", str(src),
-            "-vf", f"scale={size}:{size}",
+            "-vf", f"trim=start_frame={start_frame}:end_frame={start_frame + num_frames},setpts=PTS-STARTPTS",
             "-c:v", "libx264", "-crf", "18",
             str(dst),
         ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def save_gt_clip(src: Path, dst: Path, size: int = 480, start_frame: int = 0, num_frames: int | None = None) -> None:
+    """Trim to [start_frame, start_frame+num_frames), resize to size×size, and save."""
+    vf_parts = []
+    if start_frame > 0 or num_frames is not None:
+        trim = f"trim=start_frame={start_frame}"
+        if num_frames is not None:
+            trim += f":end_frame={start_frame + num_frames}"
+        trim += ",setpts=PTS-STARTPTS"
+        vf_parts.append(trim)
+    vf_parts.append(f"scale={size}:{size}")
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(src), "-vf", ",".join(vf_parts), "-c:v", "libx264", "-crf", "18", str(dst)],
         check=True,
         capture_output=True,
     )
@@ -115,7 +147,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--val-dir", default="datasets/libero_cosmos_mp4/val")
     parser.add_argument("--out", default="eval/base", help="Output directory")
-    parser.add_argument("--lora-checkpoint", default=None, help="Path to model_ema_bf16.pt (omit for base model)")
+    parser.add_argument("--lora-checkpoint", default=None, help="Path to model checkpoint .pt (omit for base model)")
     parser.add_argument("--num-videos", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42, help="Fixed seed — same episodes are sampled across runs")
     parser.add_argument("--guidance", type=float, default=7.0)
@@ -139,29 +171,50 @@ def main() -> None:
         name = video_path.stem
         caption_path = val_dir / "metas" / f"{name}.txt"
         prompt = caption_path.read_text().strip() if caption_path.exists() else "robot manipulation task"
-
         print(f"\n{name}: {prompt}")
 
-        video = pipe(
-            input_path=str(video_path),
-            prompt=prompt,
-            aspect_ratio=_ASPECT_RATIO,
-            num_conditional_frames=_NUM_CONDITIONAL_FRAMES,
-            guidance=args.guidance,
-            seed=args.seed,
-        )
-        if video is None:
-            print(f"  Skipped (pipeline returned None)")
-            continue
+        total_frames = get_video_frame_count(video_path)
 
-        gen_path = out_dir / f"{name}_generated.mp4"
-        gt_path = out_dir / f"{name}_gt.mp4"
-        comparison_path = out_dir / f"{name}_comparison.mp4"
+        with tempfile.TemporaryDirectory() as _tmp:
+            tmp = Path(_tmp)
 
-        save_image_or_video(video, str(gen_path), fps=_FPS)
-        save_gt_clip(video_path, gt_path)
-        make_comparison(gt_path, gen_path, comparison_path)
-        print(f"  Saved: {comparison_path}")
+            for mode in ("from_start", "from_middle"):
+                if mode == "from_start":
+                    cond_start = 0
+                else:
+                    # Middle: centre the conditioning window, ensure enough GT frames remain
+                    cond_start = max(0, total_frames // 2 - _NUM_CONDITIONAL_FRAMES // 2)
+
+                # Extract exactly _NUM_CONDITIONAL_FRAMES frames so pipe() conditions on the right segment.
+                # (read_and_process_video always takes the last N frames of the input clip)
+                cond_clip = tmp / f"cond_{mode}.mp4"
+                make_cond_clip(video_path, cond_clip, start_frame=cond_start, num_frames=_NUM_CONDITIONAL_FRAMES)
+
+                video = pipe(
+                    input_path=str(cond_clip),
+                    prompt=prompt,
+                    aspect_ratio=_ASPECT_RATIO,
+                    num_conditional_frames=_NUM_CONDITIONAL_FRAMES,
+                    guidance=args.guidance,
+                    seed=args.seed,
+                )
+                if video is None:
+                    print(f"  Skipped {mode} (pipeline returned None)")
+                    continue
+
+                num_gen_frames = video.shape[2]
+
+                # GT starts at the same frame as conditioning — same window for both modes.
+                gt_start = cond_start
+
+                gt_path = out_dir / f"{name}_{mode}_gt.mp4"
+                gen_path = out_dir / f"{name}_{mode}_gen.mp4"
+                comparison_path = out_dir / f"{name}_{mode}_comparison.mp4"
+
+                save_gt_clip(video_path, gt_path, start_frame=gt_start, num_frames=num_gen_frames)
+                save_image_or_video(video, str(gen_path), fps=_FPS)
+                make_comparison(gt_path, gen_path, comparison_path)
+                print(f"  Saved ({mode}): {comparison_path}")
 
     print(f"\nDone. All results in {out_dir}/")
 
