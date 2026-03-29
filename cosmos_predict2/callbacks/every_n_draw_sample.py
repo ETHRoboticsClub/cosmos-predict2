@@ -135,20 +135,23 @@ class EveryNDrawSample(EveryN):
         if self._first_val_batch is not None:
             return
         self._first_val_batch = data_batch
-        if not self.is_x0:
-            return
         # ema_scope is already active — use nullcontext to avoid re-entering it.
-        x0_img_fp, mse_loss, sigmas = self.x0_pred(None, model, data_batch, output_batch, loss, iteration)
+        data_type = "image" if model.is_image_batch(data_batch) else "video"
+        tag = f"val_ema_{data_type}"
+        info = {"trainer/global_step": iteration}
+
+        if self.is_x0:
+            x0_img_fp, mse_loss, sigmas = self.x0_pred(None, model, data_batch, output_batch, loss, iteration)
+            info[f"{self.name}/{tag}_x0"] = self._to_wandb_media(x0_img_fp, caption=str(iteration))
+            mse_loss_list = mse_loss.tolist()
+            info.update({f"x0_pred_mse_{tag}/Sigma{sigmas[i]:0.5f}": mse_loss_list[i] for i in range(len(mse_loss_list))})
+
+        if self.is_sample:
+            sample_img_fp = self.sample(None, model, data_batch, output_batch, loss, iteration)
+            info[f"{self.name}/{tag}_sample"] = self._to_wandb_media(sample_img_fp, caption=str(iteration))
+
         dist.barrier()
         if wandb.run:
-            data_type = "image" if model.is_image_batch(data_batch) else "video"
-            tag = f"val_ema_{data_type}"
-            info = {
-                "trainer/global_step": iteration,
-                f"{self.name}/{tag}_x0": self._to_wandb_media(x0_img_fp, caption=str(iteration)),
-            }
-            mse_loss = mse_loss.tolist()
-            info.update({f"x0_pred_mse_{tag}/Sigma{sigmas[i]:0.5f}": mse_loss[i] for i in range(len(mse_loss))})
             wandb.log(info, step=iteration)
         torch.cuda.empty_cache()
 
@@ -257,17 +260,6 @@ class EveryNDrawSample(EveryN):
                         },
                         f"s3://rundir/{self.name}/{tag}_MSE_Iter{iteration:09d}.json",
                     )
-            if self.is_sample:
-                log.debug("entering, sample", rank0_only=False)
-                sample_img_fp = self.sample(
-                    trainer,
-                    model,
-                    data_batch,
-                    output_batch,
-                    loss,
-                    iteration,
-                )
-                log.debug("done, sample", rank0_only=False)
             if self.fix_batch is not None:
                 misc.to(self.fix_batch, "cpu")
 
@@ -287,8 +279,6 @@ class EveryNDrawSample(EveryN):
                 mse_loss = mse_loss.tolist()
                 info.update({f"x0_pred_mse_{tag}/Sigma{sigmas[i]:0.5f}": mse_loss[i] for i in range(len(mse_loss))})
 
-            if self.is_sample:
-                info[f"{self.name}/{tag}_sample"] = self._to_wandb_media(sample_img_fp, caption=str(sample_counter))
             wandb.log(
                 info,
                 step=iteration,
