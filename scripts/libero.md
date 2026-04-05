@@ -118,16 +118,28 @@ Confirms within a few minutes: `val/loss` appears and frame grids are logged to 
 
 confirms within a few minutes: `val/loss` and frame grids appear in W&B, no crashes.
 
-9. train (4× GPU, g6e.12xlarge / 4× L40S)
+9. train (8× GPU, p4de.24xlarge / A100 80 GB — full run)
 ```
-NPROC=4 IMAGINAIRE_OUTPUT_ROOT=outputs torchrun \
-  --nproc_per_node="${NPROC:-4}" \
+NPROC=8 IMAGINAIRE_OUTPUT_ROOT=outputs uv run torchrun \
+  --nproc_per_node="${NPROC:-1}" \
   --master_port=12341 \
   -m scripts.train \
   --config=cosmos_predict2/configs/base/config.py -- \
-  experiment=predict2_video2world_training_2b_libero_cosmos
+  experiment=predict2_video2world_training_2b_libero_cosmos \
+  model_parallel.context_parallel_size=1 \
+  dataloader_train.batch_size=8 \
+  dataloader_val.batch_size=2 \
+  trainer.max_iter=7000 \
+  trainer.grad_accum_iter=2 \
+  trainer.validation_iter=50 \
+  trainer.max_val_iter=10 \
+  trainer.callbacks.draw_sample.every_n=200 \
+  trainer.callbacks.draw_sample.is_sample=True \
+  trainer.callbacks.draw_sample.show_all_frames=True \
+  "trainer.callbacks.draw_sample.guidance=[7.0]" \
+  checkpoint.save_iter=500
 ```
-effective batch=8 (batch_size=4 × 2 DP ranks), lr=1.112e-5 (linear scaling from paper's batch=128)
+effective batch=128 (batch_size=8 × 8 DP ranks × grad_accum=2), lr=1.778e-4 (matches paper's batch=128, no scaling needed)
 checkpoints saved every 500 steps to:
 `outputs/posttraining/video2world_lora/2b_libero_cosmos/checkpoints/`
 
