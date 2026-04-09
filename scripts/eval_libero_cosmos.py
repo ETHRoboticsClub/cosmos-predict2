@@ -24,6 +24,8 @@ import random
 import subprocess
 import tempfile
 from pathlib import Path
+import pickle
+import numpy as np
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -173,6 +175,16 @@ def main() -> None:
         prompt = caption_path.read_text().strip() if caption_path.exists() else "robot manipulation task"
         print(f"\n{name}: {prompt}")
 
+        # Load pre-computed T5 embedding from dataset (avoids running the text encoder)
+        t5_pickle = val_dir / "t5_xxl" / f"{name}.pickle"
+        if t5_pickle.exists():
+            with open(t5_pickle, "rb") as f:
+                t5_raw = pickle.load(f)
+            t5_embeddings = torch.from_numpy(np.array(t5_raw[0])).float()  # [n_tokens, embed_dim]
+        else:
+            print(f"  Warning: no T5 embedding at {t5_pickle}, using zero embedding for debugging")
+            t5_embeddings = torch.zeros(512, 1024)  # [num_tokens, embed_dim] — T5-XXL: 512 × 1024
+
         total_frames = get_video_frame_count(video_path)
 
         with tempfile.TemporaryDirectory() as _tmp:
@@ -197,6 +209,7 @@ def main() -> None:
                     num_conditional_frames=_NUM_CONDITIONAL_FRAMES,
                     guidance=args.guidance,
                     seed=args.seed,
+                    t5_embeddings=t5_embeddings,
                 )
                 if video is None:
                     print(f"  Skipped {mode} (pipeline returned None)")
