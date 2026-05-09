@@ -170,6 +170,18 @@ def convert_episode(
         capture_output=True,
     )
 
+    # ffmpeg exits 0 even when trim produces 0 frames — validate the output has a real video stream.
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_frames", "-of", "default=noprint_wrappers=1:nokey=1",
+         str(out_video)],
+        capture_output=True, text=True,
+    )
+    nb_frames = int(probe.stdout.strip() or 0)
+    if nb_frames < MIN_OUTPUT_FRAMES:
+        out_video.unlink(missing_ok=True)
+        raise ValueError(f"Output has only {nb_frames} frames (expected >= {MIN_OUTPUT_FRAMES})")
+
     (out_dir / "metas" / f"{episode_name}.txt").write_text(task_description)
     return True
 
