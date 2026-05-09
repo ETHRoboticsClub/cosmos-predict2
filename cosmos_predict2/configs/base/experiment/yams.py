@@ -37,7 +37,7 @@ yams_dataset_val = L(Dataset)(
     video_size=(480, 640),
 )
 
-# batch_size=4 per GPU × 8 DP ranks (CP=1) × grad_accum=1 = effective batch 32
+# batch_size=4 per GPU × 4 DP ranks (CP=2) × grad_accum=2 = effective batch 32
 dataloader_train_yams = L(DataLoader)(
     dataset=yams_dataset_train,
     sampler=L(get_sampler)(dataset=yams_dataset_train),
@@ -62,8 +62,8 @@ dataloader_val_yams = L(DataLoader)(
 # Compared to libero_cosmos:
 #   video_size:            (256,256) → (480,640)   match dataset native resolution
 #   batch_size (per GPU):  8         → 4            effective batch 128 → 32
-#   context_parallel_size: 2         → 1            larger res needs no CP at eff. batch 32
-#   grad_accum_iter:       2         → 1            not needed at this batch size
+#   context_parallel_size: 2         → 2            kept: 480×640 needs memory headroom on 40 GB GPUs
+#   grad_accum_iter:       2         → 2            4 DP ranks × 4 × 2 = effective batch 32
 #   weight_decay:          0         → 0.1          regularisation for small dataset
 #   grad_clip:             1.0       → 10.0         looser clip, dataset is small
 #   scheduler:             constant  → lambdalinear  warmup 1000 steps then constant (f_min=1.0)
@@ -100,7 +100,7 @@ predict2_video2world_training_2b_yams = dict(
         )
     ),
     model_parallel=dict(
-        context_parallel_size=1,  # 8 GPUs → 8 DP ranks, effective batch = 4 × 8 = 32
+        context_parallel_size=2,  # 8 GPUs → 4 DP ranks; needed for 480×640 on 40 GB GPUs
     ),
     dataloader_train=dataloader_train_yams,
     dataloader_val=dataloader_val_yams,
