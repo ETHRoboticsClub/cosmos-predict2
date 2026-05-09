@@ -28,6 +28,7 @@ import wandb
 from einops import rearrange, repeat
 from megatron.core import parallel_state
 
+from cosmos_predict2.utils.context_parallel import cat_outputs_cp
 from imaginaire.callbacks.every_n import EveryN
 from imaginaire.model import ImaginaireModel
 from imaginaire.utils import distributed, log, misc
@@ -97,6 +98,7 @@ class EveryNDrawSample(EveryN):
         self.num_sampling_step = num_sampling_step
         self.rank = distributed.get_rank()
         self.fps = fps
+        self._first_val_batch = None
 
     def on_train_start(self, model: ImaginaireModel, iteration: int = 0) -> None:
         config_job = self.config.job
@@ -117,6 +119,44 @@ class EveryNDrawSample(EveryN):
         # if self.use_negative_prompt:
         #     self.negative_prompt_data = easy_io.load(get_itemdataset_option("negative_prompt_v0_s3").path)
 
+    def on_validation_start(self, model: ImaginaireModel, dataloader_val, iteration: int = 0) -> None:
+        self._first_val_batch = None
+
+    @torch.no_grad()
+    def on_validation_step_end(
+        self,
+        model: ImaginaireModel,
+        data_batch: dict,
+        output_batch: dict,
+        loss,
+        iteration: int = 0,
+    ) -> None:
+        # Capture only the first val batch; we're already inside ema_scope from the trainer.
+        if self._first_val_batch is not None:
+            return
+        self._first_val_batch = data_batch
+        # ema_scope is already active — use nullcontext to avoid re-entering it.
+        data_type = "image" if model.is_image_batch(data_batch) else "video"
+        tag = f"val_ema_{data_type}"
+        info = {"trainer/global_step": iteration}
+
+        if self.is_x0:
+            x0_img_fp, mse_loss, sigmas = self.x0_pred(None, model, data_batch, output_batch, loss, iteration)
+            info[f"{self.name}/{tag}_x0"] = self._to_wandb_media(x0_img_fp, caption=str(iteration))
+            mse_loss_list = mse_loss.tolist()
+            info.update({f"x0_pred_mse_{tag}/Sigma{sigmas[i]:0.5f}": mse_loss_list[i] for i in range(len(mse_loss_list))})
+
+        # Full diffusion sampling is expensive — only run at draw_sample frequency, not every validation.
+        if self.is_sample and iteration % self.every_n == 0:
+            sample_img_fp = self.sample(None, model, data_batch, output_batch, loss, iteration)
+            info[f"{self.name}/{tag}_sample"] = self._to_wandb_media(sample_img_fp, caption=str(iteration))
+
+        dist.barrier()
+        if wandb.run:
+            wandb.log(info, step=iteration)
+        torch.cuda.empty_cache()
+
+
     @misc.timer("EveryNDrawSample: x0")
     @torch.no_grad()
     def x0_pred(self, trainer, model, data_batch, output_batch, loss, iteration):
@@ -127,13 +167,17 @@ class EveryNDrawSample(EveryN):
         log.debug("starting data and condition model", rank0_only=False)
         # TODO: (qsh 2024-07-01) this may be problematic due to sometimes we have uncondition, some times we have condition due to cfg dropout
         # TODO: (qsh 2025-02-25) we need to broadcast raw_data for correct visualization
-        raw_data, x0, condition = model.get_data_and_condition(data_batch)
-        _, condition, x0, _ = model.broadcast_split_for_model_parallelsim(None, condition, x0, None)
+        raw_data, x0, condition = model.pipe.get_data_and_condition(data_batch)
+        _, condition, x0, _ = model.pipe.broadcast_split_for_model_parallelsim(None, condition, x0, None)
 
         log.debug("done data and condition model", rank0_only=False)
         batch_size = x0.shape[0]
         sigmas = np.exp(
-            np.linspace(math.log(model.sde.sigma_min), math.log(model.sde.sigma_max), self.n_x0_level + 1)[1:]
+            np.linspace(
+                math.log(model.pipe.scheduler.config.sigma_min),
+                math.log(model.pipe.scheduler.config.sigma_max),
+                self.n_x0_level + 1,
+            )[1:]
         )
 
         to_show = []
@@ -145,13 +189,15 @@ class EveryNDrawSample(EveryN):
         for _, sigma in enumerate(sigmas):
             x_sigma = sigma * random_noise + x0
             log.debug(f"starting denoising {sigma}", rank0_only=False)
-            sample = model.denoise(x_sigma, _ones * sigma, condition).x0
+            sample = model.pipe.denoise(x_sigma, _ones * sigma, condition).x0
             log.debug(f"done denoising {sigma}", rank0_only=False)
             mse_loss = distributed.dist_reduce_tensor(F.mse_loss(sample, x0))
             mse_loss_list.append(mse_loss)
-            # TODO: (qsh 2025-02-25) buggy for cp code. need to gather before decode if we split xt
-            if hasattr(model, "decode"):
-                sample = model.decode(sample)
+            # Gather CP-split latent from all ranks before decoding to reconstruct the full video.
+            if model.pipe.dit.is_context_parallel_enabled:
+                sample = cat_outputs_cp(sample, seq_dim=2, cp_group=model.pipe.get_context_parallel_group())
+            if hasattr(model.pipe, "decode"):
+                sample = model.pipe.decode(sample)
             to_show.append(sample.float().cpu())
         to_show.append(
             raw_data.float().cpu(),
@@ -165,9 +211,9 @@ class EveryNDrawSample(EveryN):
     @torch.no_grad()
     def every_n_impl(self, trainer, model, data_batch, output_batch, loss, iteration):
         if self.is_ema:
-            if not model.config.ema.enabled:
+            if not model.config.pipe_config.ema.enabled:
                 return
-            context = partial(model.ema_scope, "every_n_sampling")
+            context = partial(model.pipe.ema_scope, "every_n_sampling")
         else:
             context = nullcontext
 
@@ -215,17 +261,6 @@ class EveryNDrawSample(EveryN):
                         },
                         f"s3://rundir/{self.name}/{tag}_MSE_Iter{iteration:09d}.json",
                     )
-            if self.is_sample:
-                log.debug("entering, sample", rank0_only=False)
-                sample_img_fp = self.sample(
-                    trainer,
-                    model,
-                    data_batch,
-                    output_batch,
-                    loss,
-                    iteration,
-                )
-                log.debug("done, sample", rank0_only=False)
             if self.fix_batch is not None:
                 misc.to(self.fix_batch, "cpu")
 
@@ -240,13 +275,11 @@ class EveryNDrawSample(EveryN):
                 "sample_counter": sample_counter,
             }
             if self.is_x0:
-                info[f"{self.name}/{tag}_x0"] = wandb.Image(x0_img_fp, caption=f"{sample_counter}")
+                info[f"{self.name}/{tag}_x0"] = self._to_wandb_media(x0_img_fp, caption=str(sample_counter))
                 # convert mse_loss to a dict
                 mse_loss = mse_loss.tolist()
                 info.update({f"x0_pred_mse_{tag}/Sigma{sigmas[i]:0.5f}": mse_loss[i] for i in range(len(mse_loss))})
 
-            if self.is_sample:
-                info[f"{self.name}/{tag}_sample"] = wandb.Image(sample_img_fp, caption=f"{sample_counter}")
             wandb.log(
                 info,
                 step=iteration,
@@ -263,7 +296,7 @@ class EveryNDrawSample(EveryN):
             data_batch = misc.to(self.fix_batch, **model.tensor_kwargs)
 
         tag = "ema" if self.is_ema else "reg"
-        raw_data, x0, condition = model.get_data_and_condition(data_batch)
+        raw_data, x0, condition = model.pipe.get_data_and_condition(data_batch)
         if self.use_negative_prompt:
             batch_size = x0.shape[0]
             data_batch["neg_t5_text_embeddings"] = misc.to(
@@ -279,32 +312,35 @@ class EveryNDrawSample(EveryN):
             )
             data_batch["neg_t5_text_mask"] = data_batch["t5_text_mask"]
 
-        to_show = []
-        for guidance in self.guidance:
-            sample = model.generate_samples_from_batch(
-                data_batch,
-                guidance=guidance,
-                # make sure no mismatch and also works for cp
-                state_shape=x0.shape[1:],
-                n_sample=x0.shape[0],
-                num_steps=self.num_sampling_step,
-                is_negative_prompt=True if self.use_negative_prompt else False,
-            )
-            if hasattr(model, "decode"):
-                sample = model.decode(sample)
-            to_show.append(sample.float().cpu())
-
-        to_show.append(raw_data.float().cpu())
+        # Use only the first guidance value to avoid 4x cost (default list has 4 values).
+        # self.guidance may be a Hydra ListConfig (not a plain list), so index then cast.
+        guidance = float(self.guidance[0]) if hasattr(self.guidance, "__getitem__") else float(self.guidance)
+        # generate_samples_from_batch handles CP split/gather and decode internally.
+        sample = model.pipe.generate_samples_from_batch(
+            data_batch,
+            guidance=guidance,
+            state_shape=x0.shape[1:],
+            n_sample=1,  # only one sample needed for visualization
+            num_steps=self.num_sampling_step,
+        )
+        to_show = [sample.float().cpu(), raw_data[:1].float().cpu()]
 
         base_fp_wo_ext = f"{tag}_ReplicateID{self.data_parallel_id:04d}_Sample_Iter{iteration:09d}"
 
-        batch_size = output_batch["x0"].shape[0]
         if is_tp_cp_pp_rank0():
-            local_path = self.run_save(to_show, batch_size, base_fp_wo_ext)
+            local_path = self.run_save(to_show, batch_size=1, base_fp_wo_ext=base_fp_wo_ext)
             return local_path
         return None
 
-    def run_save(self, to_show, batch_size, base_fp_wo_ext) -> str | None:
+    def _to_wandb_media(self, media: str | None, caption: str = "") -> wandb.Image | wandb.Video | None:
+        """Return wandb.Video for .mp4 paths, wandb.Image for all other paths."""
+        if media is None:
+            return None
+        if media.endswith(".mp4"):
+            return wandb.Video(media, fps=self.fps, format="mp4")
+        return wandb.Image(media, caption=caption)
+
+    def run_save(self, to_show, batch_size, base_fp_wo_ext) -> str | np.ndarray | None:
         to_show = (1.0 + torch.stack(to_show, dim=0).clamp(-1, 1)) / 2.0  # [n, b, c, t, h, w]
         is_single_frame = to_show.shape[3] == 1
         n_viz_sample = min(self.n_viz_sample, batch_size)
@@ -317,38 +353,27 @@ class EveryNDrawSample(EveryN):
                 fps=self.fps,
             )
 
-        file_base_fp = f"{base_fp_wo_ext}_resize.jpg"
-        local_path = f"{self.local_dir}/{file_base_fp}"
+        if not (self.rank == 0 and wandb.run):
+            return None
 
-        if self.rank == 0 and wandb.run:
-            if is_single_frame:  # image case
-                to_show = rearrange(
-                    to_show[:, :n_viz_sample],
-                    "n b c t h w -> t c (n h) (b w)",
-                )
-                image_grid = torchvision.utils.make_grid(to_show, nrow=1, padding=0, normalize=False)
-                # resize so that wandb can handle it
-                torchvision.utils.save_image(resize_image(image_grid, 1024), local_path, nrow=1, scale_each=True)
+        to_show = to_show[:, :n_viz_sample]
+
+        if is_single_frame or not self.show_all_frames:
+            # 3-frame grid (or single image) → JPEG
+            if not is_single_frame:
+                _T = to_show.shape[3]
+                to_show = to_show[:, :, :, [0, _T // 2, _T - 1]]
+                to_show = rearrange(to_show, "n b c t h w -> 1 c (n h) (b t w)")
             else:
-                to_show = to_show[:, :n_viz_sample]  # [n, b, c, 3, h, w]
-                if not self.show_all_frames:
-                    # resize 3 frames frames so that we can display them on wandb
-                    _T = to_show.shape[3]
-                    three_frames_list = [0, _T // 2, _T - 1]
-                    to_show = to_show[:, :, :, three_frames_list]
-                    log_image_size = 1024
-                else:
-                    log_image_size = 512 * to_show.shape[3]
-                to_show = rearrange(
-                    to_show,
-                    "n b c t h w -> 1 c (n h) (b t w)",
-                )
-
-                # resize so that wandb can handle it
-                image_grid = torchvision.utils.make_grid(to_show, nrow=1, padding=0, normalize=False)
-                torchvision.utils.save_image(
-                    resize_image(image_grid, log_image_size), local_path, nrow=1, scale_each=True
-                )
-
+                to_show = rearrange(to_show, "n b c t h w -> t c (n h) (b w)")
+            image_grid = torchvision.utils.make_grid(to_show, nrow=1, padding=0, normalize=False)
+            local_path = f"{self.local_dir}/{base_fp_wo_ext}_resize.jpg"
+            torchvision.utils.save_image(resize_image(image_grid, 1024), local_path, nrow=1, scale_each=True)
             return local_path
-        return None
+        else:
+            # All frames → mp4 file (avoids moviepy dependency for wandb.Video)
+            video = rearrange(to_show, "n b c t h w -> t (n h) (b w) c")
+            video_uint8 = (video * 255).byte()
+            local_path = f"{self.local_dir}/{base_fp_wo_ext}.mp4"
+            torchvision.io.write_video(local_path, video_uint8, fps=self.fps)
+            return local_path

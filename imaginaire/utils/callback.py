@@ -305,7 +305,13 @@ class EMAModelCallback(Callback):
 
     def on_train_start(self, model: ImaginaireModel, iteration: int = 0) -> None:
         # Set up the EMA model weight tracker.
-        if model.config.ema.enabled:
+        # Some models (e.g. Predict2Video2WorldModel) manage EMA internally via
+        # pipe_config.ema rather than model.config.ema — skip in that case.
+        try:
+            ema_enabled = model.config.ema.enabled
+        except omegaconf.errors.ConfigAttributeError:
+            return
+        if ema_enabled:
             assert hasattr(model, "ema"), "EMA should be initialized from ImaginaireModel"
             # EMA model must be kept in FP32 precision.
             model.ema = model.ema.to(dtype=torch.float32)
@@ -321,7 +327,11 @@ class EMAModelCallback(Callback):
         iteration: int = 0,
     ) -> None:
         # Update the EMA model with the new regular weights.
-        if model.config.ema.enabled:
+        try:
+            ema_enabled = model.config.ema.enabled
+        except omegaconf.errors.ConfigAttributeError:
+            return
+        if ema_enabled:
             model.ema.update_average(model, iteration)
 
 
