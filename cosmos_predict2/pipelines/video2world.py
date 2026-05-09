@@ -786,6 +786,73 @@ class Video2WorldPipeline(BasePipeline):
         return x0_fn
 
     @torch.no_grad()
+    def generate_samples_from_batch(
+        self,
+        data_batch: dict,
+        guidance: float = 7.0,
+        state_shape: tuple | None = None,
+        n_sample: int = 1,
+        num_steps: int = 35,
+        seed: int = 0,
+    ) -> torch.Tensor:
+        """Run the full diffusion sampling loop on a training/val data batch.
+
+        Unlike __call__, this operates directly on a preprocessed batch (no file I/O),
+        making it suitable for use inside training callbacks.
+
+        Args:
+            data_batch: batch dict from the dataloader (already on device).
+            guidance: classifier-free guidance scale.
+            state_shape: latent shape [C, T, H, W]. Inferred from batch if None.
+            n_sample: number of samples to generate (slice from batch).
+            num_steps: number of denoising steps.
+            seed: random seed for reproducibility.
+
+        Returns:
+            Decoded video tensor of shape (n_sample, C, T, H, W) in [-1, 1].
+        """
+        if state_shape is None:
+            _, x0, _ = self.get_data_and_condition(data_batch)
+            state_shape = x0.shape[1:]
+            n_sample = min(n_sample, x0.shape[0])
+
+        # Slice batch to n_sample to avoid generating the full batch.
+        batch = {k: v[:n_sample] if isinstance(v, torch.Tensor) else v for k, v in data_batch.items()}
+
+        x0_fn = self.get_x0_fn_from_batch(batch, guidance, is_negative_prompt=False)
+
+        x = (
+            misc.arch_invariant_rand(
+                (n_sample,) + tuple(state_shape),  # noqa: RUF005
+                torch.float32,
+                self.tensor_kwargs["device"],
+                seed,
+            )
+            * self.scheduler.config.sigma_max
+        )
+
+        if self.dit.is_context_parallel_enabled:
+            x = split_inputs_cp(x=x, seq_dim=2, cp_group=self.get_context_parallel_group())
+
+        self.scheduler.set_timesteps(num_steps, device=x.device)
+        x = x.to(dtype=torch.float32)
+        x0_prev: torch.Tensor | None = None
+
+        for i, _ in enumerate(self.scheduler.timesteps):
+            sigma_t = self.scheduler.sigmas[i].to(x.device, dtype=torch.float32)
+            x0_pred = x0_fn(x, sigma_t.repeat(x.shape[0]))
+            x, x0_prev = self.scheduler.step(x0_pred=x0_pred, i=i, sample=x, x0_prev=x0_prev)
+
+        # Final clean pass at sigma_min.
+        sigma_min = self.scheduler.sigmas[-1].to(x.device, dtype=torch.float32)
+        samples = x0_fn(x, sigma_min.repeat(x.shape[0]))
+
+        if self.dit.is_context_parallel_enabled:
+            samples = cat_outputs_cp(samples, seq_dim=2, cp_group=self.get_context_parallel_group())
+
+        return self.decode(samples)
+
+    @torch.no_grad()
     def __call__(
         self,
         input_path: str,

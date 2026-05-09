@@ -15,6 +15,7 @@
 
 import os
 import pickle
+import time
 import traceback
 import warnings
 from typing import Any
@@ -118,7 +119,11 @@ class Dataset(Dataset):
     def __getitem__(self, index) -> dict | Any:
         try:
             data = dict()
+            _t0 = time.perf_counter()
             video, fps = self._get_frames(self.video_paths[index])
+            _load_s = time.perf_counter() - _t0
+            if _load_s > 0.5:
+                log.warning(f"Slow data load: {self.video_paths[index]} took {_load_s:.2f}s")
             video = video.permute(1, 0, 2, 3)  # Rearrange from [T, C, H, W] to [C, T, H, W]
             video_path = self.video_paths[index]
             t5_embedding_path = os.path.join(

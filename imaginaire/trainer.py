@@ -109,6 +109,16 @@ class ImaginaireTrainer:
         if distributed.is_rank0():
             # Print important environment variables and the effective config.
             log.info("Config:\n" + config.pretty_print(use_color=True))
+            if USE_MEGATRON:
+                dp = parallel_state.get_data_parallel_world_size()
+                cp = config.model_parallel.context_parallel_size
+                batch = config.dataloader_train.batch_size
+                grad_accum = config.trainer.grad_accum_iter
+                log.info(
+                    f"Parallelism: DP={dp} CP={cp} | "
+                    f"batch_size={batch} grad_accum={grad_accum} | "
+                    f"effective_batch={batch * dp * grad_accum}"
+                )
         misc.print_environ_variables(["TORCH_HOME", "IMAGINAIRE_OUTPUT_ROOT"])
         # Set the random seed. If multi-GPU, different ranks are set with different seeds.
         misc.set_random_seed(seed=config.trainer.seed, by_rank=True)

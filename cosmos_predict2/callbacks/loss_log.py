@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
+import wandb
 
 from imaginaire.model import ImaginaireModel
 from imaginaire.utils import distributed, log
@@ -53,6 +54,7 @@ class LossLog(Callback):
         self.name = self.__class__.__name__
 
         self.train_video_log = _LossRecord()
+        self.val_video_log = _LossRecord()
 
     def on_before_backward(
         self,
@@ -97,3 +99,35 @@ class LossLog(Callback):
                 info = {}
                 if iter_count > 0:
                     info[f"train@{self.logging_iter_multipler}/loss"] = loss
+                if wandb.run:
+                    wandb.log(info, step=iteration)
+
+    def on_validation_start(
+        self, model: ImaginaireModel, dataloader_val: torch.utils.data.DataLoader, iteration: int = 0
+    ) -> None:
+        self.val_video_log.reset()
+
+    def on_validation_step_end(
+        self,
+        model: ImaginaireModel,
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        iteration: int = 0,
+    ) -> None:
+        if not (torch.isnan(loss) or torch.isinf(loss)):
+            _loss = output_batch["loss"].detach().mean(dim=0)
+            self.val_video_log.iter_count += 1
+            self.val_video_log.loss += _loss
+
+    def on_validation_end(self, model: ImaginaireModel, iteration: int = 0) -> None:
+        world_size = dist.get_world_size()
+        loss, iter_count = self.val_video_log.get_stat()
+        iter_count *= world_size
+
+        if distributed.is_rank0():
+            info = {}
+            if iter_count > 0:
+                info["val/loss"] = loss
+            if wandb.run:
+                wandb.log(info, step=iteration)
