@@ -19,8 +19,10 @@ Run twice to compare base vs. fine-tuned:
 """
 
 import argparse
+import copy
 import os
 import random
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -28,6 +30,9 @@ import pickle
 import numpy as np
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# Use system ffmpeg if available, fall back to imageio_ffmpeg bundle.
+_FFMPEG = shutil.which("ffmpeg") or __import__("imageio_ffmpeg").get_ffmpeg_exe()
 
 import torch
 from tqdm import tqdm
@@ -38,7 +43,6 @@ from imaginaire.constants import get_cosmos_predict2_video2world_checkpoint
 from imaginaire.utils.io import save_image_or_video
 
 _MODEL_SIZE = "2B"
-_RESOLUTION = "480"
 _FPS = 10
 _ASPECT_RATIO = "1:1"
 _NUM_CONDITIONAL_FRAMES = 5  # mimic-video paper
@@ -47,17 +51,24 @@ _LORA_ALPHA = 16
 _LORA_TARGET_MODULES = "q_proj,k_proj,v_proj,output_proj,mlp.layer1,mlp.layer2"
 
 
-def load_pipeline(lora_checkpoint: str | None) -> Video2WorldPipeline:
-    config = get_cosmos_predict2_video2world_pipeline(model_size=_MODEL_SIZE, resolution=_RESOLUTION, fps=_FPS)
+def load_pipeline(lora_checkpoint: str | None, resolution: str = "480") -> Video2WorldPipeline:
+    # "240" has no dedicated checkpoint — load the 480p model and override resolution for inference sizing.
+    model_resolution = resolution if resolution in ("480", "720") else "480"
+    config = copy.deepcopy(
+        get_cosmos_predict2_video2world_pipeline(model_size=_MODEL_SIZE, resolution=model_resolution, fps=_FPS)
+    )
     config.prompt_refiner_config.enabled = False
     config.guardrail_config.enabled = False
+    if resolution != model_resolution:
+        config.resolution = resolution  # generates at the requested smaller size
 
-    dit_path = get_cosmos_predict2_video2world_checkpoint(model_size=_MODEL_SIZE, resolution=_RESOLUTION, fps=_FPS)
+    dit_path = get_cosmos_predict2_video2world_checkpoint(model_size=_MODEL_SIZE, resolution=model_resolution, fps=_FPS)
     pipe = Video2WorldPipeline.from_config(
         config=config,
         dit_path=dit_path,
         device="cuda",
         torch_dtype=torch.bfloat16,
+        use_text_encoder=False,  # T5-11B is 43 GB; use pre-computed embeddings from .pickle files instead
     )
 
     if lora_checkpoint:
@@ -86,23 +97,17 @@ def load_pipeline(lora_checkpoint: str | None) -> Video2WorldPipeline:
 
 
 def get_video_frame_count(path: Path) -> int:
-    """Return total frame count of a video file using ffprobe."""
-    result = subprocess.run(
-        [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-count_packets", "-show_entries", "stream=nb_read_packets",
-            "-of", "csv=p=0", str(path),
-        ],
-        capture_output=True, text=True, check=True,
-    )
-    return int(result.stdout.strip())
+    """Return total frame count of a video file using decord."""
+    from decord import VideoReader, cpu
+    vr = VideoReader(str(path), ctx=cpu(0), num_threads=1)
+    return len(vr)
 
 
 def make_cond_clip(src: Path, dst: Path, start_frame: int, num_frames: int) -> None:
     """Extract [start_frame, start_frame+num_frames) as a standalone clip for pipe() conditioning."""
     subprocess.run(
         [
-            "ffmpeg", "-y", "-i", str(src),
+            _FFMPEG, "-y", "-i", str(src),
             "-vf", f"trim=start_frame={start_frame}:end_frame={start_frame + num_frames},setpts=PTS-STARTPTS",
             "-c:v", "libx264", "-crf", "18",
             str(dst),
@@ -123,7 +128,7 @@ def save_gt_clip(src: Path, dst: Path, size: int = 480, start_frame: int = 0, nu
         vf_parts.append(trim)
     vf_parts.append(f"scale={size}:{size}")
     subprocess.run(
-        ["ffmpeg", "-y", "-i", str(src), "-vf", ",".join(vf_parts), "-c:v", "libx264", "-crf", "18", str(dst)],
+        [_FFMPEG, "-y", "-i", str(src), "-vf", ",".join(vf_parts), "-c:v", "libx264", "-crf", "18", str(dst)],
         check=True,
         capture_output=True,
     )
@@ -133,7 +138,7 @@ def make_comparison(gt_path: Path, gen_path: Path, out_path: Path) -> None:
     """Horizontally stack ground truth and generated video."""
     subprocess.run(
         [
-            "ffmpeg", "-y",
+            _FFMPEG, "-y",
             "-i", str(gt_path),
             "-i", str(gen_path),
             "-filter_complex", "hstack=inputs=2",
@@ -153,6 +158,8 @@ def main() -> None:
     parser.add_argument("--num-videos", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42, help="Fixed seed — same episodes are sampled across runs")
     parser.add_argument("--guidance", type=float, default=7.0)
+    parser.add_argument("--resolution", default="480", choices=["240", "480", "512", "720"],
+                        help="Output resolution (240 for fast low-res test, 480 for full quality)")
     args = parser.parse_args()
 
     val_dir = Path(args.val_dir)
@@ -167,7 +174,7 @@ def main() -> None:
     videos = rng.sample(all_videos, min(args.num_videos, len(all_videos)))
     print(f"Sampled {len(videos)} episodes from {val_dir}")
 
-    pipe = load_pipeline(args.lora_checkpoint)
+    pipe = load_pipeline(args.lora_checkpoint, resolution=args.resolution)
 
     for video_path in tqdm(videos):
         name = video_path.stem
@@ -175,15 +182,23 @@ def main() -> None:
         prompt = caption_path.read_text().strip() if caption_path.exists() else "robot manipulation task"
         print(f"\n{name}: {prompt}")
 
-        # Load pre-computed T5 embedding from dataset (avoids running the text encoder)
+        # Load pre-computed T5 embedding from dataset (avoids running the text encoder).
+        # Pickles store trimmed embeddings [n_tokens, 1024]; pad to 512 with zeros to match
+        # what CosmosT5TextEncoder.encode_prompts() returns — the DIT was always trained on
+        # 512-length sequences and the cross-attention softmax depends on that fixed length.
+        _T5_NUM_TOKENS = 512
+        _T5_EMBED_DIM = 1024
         t5_pickle = val_dir / "t5_xxl" / f"{name}.pickle"
         if t5_pickle.exists():
             with open(t5_pickle, "rb") as f:
                 t5_raw = pickle.load(f)
-            t5_embeddings = torch.from_numpy(np.array(t5_raw[0])).float()  # [n_tokens, embed_dim]
+            raw = torch.from_numpy(np.array(t5_raw[0])).float()  # [n_tokens, 1024]
+            n_tokens = raw.shape[0]
+            t5_embeddings = torch.zeros(_T5_NUM_TOKENS, _T5_EMBED_DIM)
+            t5_embeddings[:n_tokens] = raw  # zero-pad to 512, matching encode_prompts output
         else:
             print(f"  Warning: no T5 embedding at {t5_pickle}, using zero embedding for debugging")
-            t5_embeddings = torch.zeros(512, 1024)  # [num_tokens, embed_dim] — T5-XXL: 512 × 1024
+            t5_embeddings = torch.zeros(_T5_NUM_TOKENS, _T5_EMBED_DIM)
 
         total_frames = get_video_frame_count(video_path)
 
@@ -209,7 +224,7 @@ def main() -> None:
                     num_conditional_frames=_NUM_CONDITIONAL_FRAMES,
                     guidance=args.guidance,
                     seed=args.seed,
-                    t5_embeddings=t5_embeddings,
+                    t5_embeddings=t5_embeddings.cuda().to(torch.bfloat16),
                 )
                 if video is None:
                     print(f"  Skipped {mode} (pipeline returned None)")
@@ -224,7 +239,7 @@ def main() -> None:
                 gen_path = out_dir / f"{name}_{mode}_gen.mp4"
                 comparison_path = out_dir / f"{name}_{mode}_comparison.mp4"
 
-                save_gt_clip(video_path, gt_path, start_frame=gt_start, num_frames=num_gen_frames)
+                save_gt_clip(video_path, gt_path, size=int(args.resolution), start_frame=gt_start, num_frames=num_gen_frames)
                 save_image_or_video(video, str(gen_path), fps=_FPS)
                 make_comparison(gt_path, gen_path, comparison_path)
                 print(f"  Saved ({mode}): {comparison_path}")

@@ -415,7 +415,12 @@ class Video2WorldPipeline(BasePipeline):
         pass
 
     def _get_data_batch_input(
-        self, video: torch.Tensor, prompt: str, negative_prompt: str = "", num_latent_conditional_frames: int = 1
+        self,
+        video: torch.Tensor,
+        prompt: str,
+        negative_prompt: str = "",
+        num_latent_conditional_frames: int = 1,
+        t5_embeddings: torch.Tensor | None = None,
     ):
         """
         Prepares the input data batch for the diffusion model.
@@ -429,6 +434,8 @@ class Video2WorldPipeline(BasePipeline):
             prompt (str): The text prompt for conditioning.
             negative_prompt (str): Negative prompt.
             num_latent_conditional_frames (int, optional): The number of latent conditional frames. Defaults to 1.
+            t5_embeddings (torch.Tensor | None): Pre-computed T5 embeddings [n_tokens, embed_dim] or
+                [1, n_tokens, embed_dim]. When provided, skips running the text encoder.
 
         Returns:
             dict: A dictionary containing the prepared data batch, moved to the correct device and dtype.
@@ -436,10 +443,21 @@ class Video2WorldPipeline(BasePipeline):
         B, C, T, H, W = video.shape
 
         self.batch_size = 1
+        if t5_embeddings is not None:
+            emb = t5_embeddings if t5_embeddings.dim() == 3 else t5_embeddings.unsqueeze(0)
+            text_emb = emb.to(dtype=self.torch_dtype)
+        else:
+            if self.text_encoder is None:
+                raise RuntimeError(
+                    "text_encoder is None (loaded with use_text_encoder=False). "
+                    "Pass pre-computed t5_embeddings to __call__ instead."
+                )
+            text_emb = self.encode_prompt(prompt).to(dtype=self.torch_dtype)
+
         data_batch = {
             "dataset_name": "video_data",
             "video": video,
-            "t5_text_embeddings": self.encode_prompt(prompt).to(dtype=self.torch_dtype),
+            "t5_text_embeddings": text_emb,
             "fps": torch.randint(16, 32, (self.batch_size,)),  # Random FPS (might be used by model)
             "padding_mask": torch.zeros(self.batch_size, 1, H, W),  # Padding mask (assumed no padding here)
             "num_conditional_frames": num_latent_conditional_frames,  # Specify number of conditional frames
@@ -865,6 +883,7 @@ class Video2WorldPipeline(BasePipeline):
         seed: int = 0,
         use_cuda_graphs: bool = False,
         return_prompt: bool = False,
+        t5_embeddings: torch.Tensor | None = None,
     ) -> torch.Tensor | None:
         # Parameter check
         width, height = VIDEO_RES_SIZE_INFO[self.config.resolution][aspect_ratio]
@@ -941,7 +960,11 @@ class Video2WorldPipeline(BasePipeline):
 
         # Prepare the data batch with text embeddings
         data_batch = self._get_data_batch_input(
-            vid_input, prompt, negative_prompt, num_latent_conditional_frames=num_latent_conditional_frames
+            vid_input,
+            prompt,
+            negative_prompt,
+            num_latent_conditional_frames=num_latent_conditional_frames,
+            t5_embeddings=t5_embeddings,
         )
 
         # preprocess
