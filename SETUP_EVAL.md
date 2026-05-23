@@ -2,7 +2,7 @@
 
 | Setting | Value |
 |---------|-------|
-| Instance type | `g7e.2xlarge` |
+| Instance type | `g7e.8xlarge` |
 | Platform | Linux/UNIX |
 | AMI | Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.11 (Ubuntu 24.04) 20260517 |
 
