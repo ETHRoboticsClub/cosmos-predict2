@@ -81,3 +81,4 @@ uv run python scripts/run_lerobot_inference.py \
     --episode 0 \
     --dit_path checkpoints/Cosmos-Predict2-2B-Video2World/model.pt
 ```
+7. copy result in s3: aws s3 cp generated_video.mp4 s3://ethrc-ml-data-916780037007/robot-learning/cosmos-2-eval/file.mp4
