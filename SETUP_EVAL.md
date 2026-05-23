@@ -1,45 +1,83 @@
-#### INSTANCE SETUP ######
+# Instance Setup
 
-Instance type
-g7e.2xlarge
+| Setting | Value |
+|---------|-------|
+| Instance type | `g7e.2xlarge` |
+| Platform | Linux/UNIX |
+| AMI | Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.11 (Ubuntu 24.04) 20260517 |
 
-Platform details
-Linux/UNIX
+---
 
-AMI name
-Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.11 (Ubuntu 24.04) 20260517
+## EC2 Terminal Commands
 
-#### EC2 TERMINAL COMMANDS #######
+### 1. Clone repo and switch branch
 
-1. Clone repo : https://github.com/ETHRoboticsClub/cosmos-predict2
+```bash
+git clone https://github.com/ETHRoboticsClub/cosmos-predict2.git
+cd cosmos-predict2
+git checkout mateo-raph/cosmos-eval
+```
 
-2. Go on branch: git checkout mateo-raph/cosmos-eval
+### 2. Install uv and create environment
 
-2. Download uv: curl -LsSf https://astral.sh/uv/install.sh | sh
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.bashrc
+uv lock && uv sync --extra cu128
+```
 
-2. Create env : uv lock && uv sync --extra cu126
+### 3. Check environment
 
-3. Check environment is ok: uv run python scripts/test_environment.py
+```bash
+uv run python scripts/test_environment.py
+```
 
-3. Huggingface login -> access token should have public repo access (you have to accept the repo conditions in browser first): uv run huggingface-cli login
+### 4. HuggingFace login
 
-4. Download model (tokenizer) : uv run huggingface-cli download nvidia/Cosmos-Predict2-2B-Video2World \
+Accept the [model repo conditions](https://huggingface.co/nvidia/Cosmos-Predict2-2B-Video2World) in your browser first, then:
+
+```bash
+uv run huggingface-cli login
+```
+
+Your access token needs public repo access.
+
+### 5. Download model tokenizer
+
+```bash
+uv run huggingface-cli download nvidia/Cosmos-Predict2-2B-Video2World \
   --include "tokenizer/*" \
   --local-dir checkpoints/nvidia/Cosmos-Predict2-2B-Video2World
+```
 
-5. Login to AWS: aws login --remote
+### 6. Download T5 text encoder
 
-5. Download checkpoint you want (make sure it's not just LoRA weights, but the fused version): aws s3 cp s3://ethrc-ml-data-916780037007/robot-learning/checkpoints/cosmos/ . --recursive
-
-5. Download t5 only: uv run huggingface-cli download google-t5/t5-11b \
+```bash
+uv run huggingface-cli download google-t5/t5-11b \
   --local-dir checkpoints/google-t5/t5-11b \
   --exclude "tf_model.h5"
+```
 
-6. Download ffmpeg: sudo apt update
-sudo apt install -y ffmpeg
+### 7. Download checkpoint from S3
 
-6. Run inference:  python scripts/run_lerobot_inference.py \
+Make sure it's the fused version, not just LoRA weights.
+
+```bash
+aws login --remote
+aws s3 cp s3://ethrc-ml-data-916780037007/robot-learning/checkpoints/cosmos/ . --recursive
+```
+
+### 8. Install ffmpeg
+
+```bash
+sudo apt update && sudo apt install -y ffmpeg
+```
+
+### 9. Run inference
+
+```bash
+uv run python scripts/run_lerobot_inference.py \
     --repo_id ETHRC/yams-closed-carton-box-to-migros-basket-go2 \
     --episode 0 \
     --dit_path checkpoints/Cosmos-Predict2-2B-Video2World/model.pt
+```
