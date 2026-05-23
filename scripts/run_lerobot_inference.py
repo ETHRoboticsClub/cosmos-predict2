@@ -3,20 +3,21 @@
 
 """
 Download a single episode from a LeRobot HuggingFace dataset and run
-Video2World inference on a frame (or short clip) from that episode.
+Video2World inference at regular time intervals throughout the episode.
 
 Examples:
 
-    # Base model, single frame
+    # Base model, every 5 seconds (default)
     python scripts/run_lerobot_inference.py \
         --repo_id ETHRC/yams-closed-carton-box-to-migros-basket-go2 \
         --episode 0 \
         --dit_path checkpoints/Cosmos-Predict2-2B-Video2World/model.pt
 
-    # LoRA fine-tuned, 5-frame conditioning
+    # LoRA fine-tuned, 5-frame conditioning, every 3 seconds
     python scripts/run_lerobot_inference.py \
         --repo_id ETHRC/yams-closed-carton-box-to-migros-basket-go2 \
         --episode 0 \
+        --interval_sec 3 \
         --num_conditional_frames 5 \
         --dit_path checkpoints/Cosmos-Predict2-2B-Video2World/model.pt \
         --lora_checkpoint outputs/checkpoints/model/iter_007000.pt
@@ -134,6 +135,53 @@ def download_episode(repo_id: str, dataset_dir: Path, camera_key: str, video_rel
 
 
 # ---------------------------------------------------------------------------
+# Video metadata
+# ---------------------------------------------------------------------------
+
+def get_video_duration(video_path: Path) -> float:
+    """Return video duration in seconds."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(video_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return float(result.stdout.strip())
+
+
+def get_video_frame_count(video_path: Path) -> int:
+    """Return total frame count of a video file."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-count_packets", "-show_entries", "stream=nb_read_packets",
+            "-of", "csv=p=0", str(video_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return int(result.stdout.strip())
+
+
+def inference_times(duration_sec: float, interval_sec: float) -> list[float]:
+    """Return timestamps (seconds) at which to run inference."""
+    if interval_sec <= 0:
+        raise ValueError(f"interval_sec must be positive, got {interval_sec}")
+    times: list[float] = []
+    t = 0.0
+    while t < duration_sec:
+        times.append(t)
+        t += interval_sec
+    return times
+
+
+# ---------------------------------------------------------------------------
 # Frame extraction
 # ---------------------------------------------------------------------------
 
@@ -225,7 +273,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Download a LeRobot episode and run Video2World inference")
     parser.add_argument("--repo_id", type=str, required=True, help="HuggingFace dataset repo ID")
     parser.add_argument("--episode", type=int, default=0, help="Episode index")
-    parser.add_argument("--frame_index", type=int, default=0, help="Frame index to extract")
+    parser.add_argument(
+        "--interval_sec",
+        type=float,
+        default=5.0,
+        help="Run inference every N seconds across the episode (default: 5)",
+    )
     parser.add_argument("--camera", type=str, default="top", help="Substring to match camera key")
     parser.add_argument("--dit_path", type=str, required=True, help="Path to base DiT checkpoint")
     parser.add_argument("--lora_checkpoint", type=str, default=None, help="Path to LoRA checkpoint .pt")
@@ -279,17 +332,19 @@ def main() -> None:
         prompt = get_task_for_episode(dataset_dir, args.episode)
     print(f"Prompt:        {prompt}")
 
-    # --- 3. Extract frame(s) ---
+    # --- 3. Schedule inference timestamps ---
+    src_fps = info.get("fps", args.fps)
+    duration_sec = get_video_duration(episode_video)
+    total_frames = get_video_frame_count(episode_video)
+    times = inference_times(duration_sec, args.interval_sec)
+
+    print(f"Episode FPS:   {src_fps}")
+    print(f"Duration:      {duration_sec:.2f}s ({total_frames} frames)")
+    print(f"Interval:      {args.interval_sec}s → {len(times)} inference(s)")
+
     os.makedirs(args.output_dir, exist_ok=True)
 
-    if args.num_conditional_frames == 1:
-        input_path = os.path.join(args.output_dir, "extracted_frame.png")
-        extract_frame(episode_video, args.frame_index, Path(input_path))
-    else:
-        input_path = os.path.join(args.output_dir, "extracted_clip.mp4")
-        extract_clip(episode_video, args.frame_index, args.num_conditional_frames, Path(input_path))
-
-    # --- 4. Load pipeline and run inference ---
+    # --- 4. Load pipeline once ---
     pipe = load_pipeline(
         dit_path=args.dit_path,
         lora_checkpoint=args.lora_checkpoint,
@@ -298,23 +353,46 @@ def main() -> None:
         fps=args.fps,
     )
 
-    print("Running inference...")
-    video = pipe(
-        input_path=input_path,
-        prompt=prompt,
-        aspect_ratio=args.aspect_ratio,
-        num_conditional_frames=args.num_conditional_frames,
-        guidance=args.guidance,
-        seed=args.seed,
-    )
+    # --- 5. Run inference at each timestamp ---
+    saved = 0
+    for time_sec in times:
+        frame_index = int(time_sec * src_fps)
+        if frame_index + args.num_conditional_frames > total_frames:
+            print(
+                f"Skipping t={time_sec:.1f}s (frame {frame_index}): "
+                f"need {args.num_conditional_frames} frames, only {total_frames - frame_index} left"
+            )
+            continue
 
-    # --- 5. Save output ---
-    if video is not None:
-        output_path = os.path.join(args.output_dir, "generated_video.mp4")
-        save_image_or_video(video, output_path, fps=args.fps)
-        print(f"Saved generated video to {output_path}")
-    else:
-        print("Pipeline returned None — generation failed.")
+        tag = f"{int(time_sec):04d}s"
+        print(f"\n--- t={time_sec:.1f}s (frame {frame_index}) ---")
+
+        if args.num_conditional_frames == 1:
+            input_path = os.path.join(args.output_dir, f"extracted_frame_{tag}.png")
+            extract_frame(episode_video, frame_index, Path(input_path))
+        else:
+            input_path = os.path.join(args.output_dir, f"extracted_clip_{tag}.mp4")
+            extract_clip(episode_video, frame_index, args.num_conditional_frames, Path(input_path))
+
+        print("Running inference...")
+        video = pipe(
+            input_path=input_path,
+            prompt=prompt,
+            aspect_ratio=args.aspect_ratio,
+            num_conditional_frames=args.num_conditional_frames,
+            guidance=args.guidance,
+            seed=args.seed,
+        )
+
+        if video is not None:
+            output_path = os.path.join(args.output_dir, f"generated_{tag}.mp4")
+            save_image_or_video(video, output_path, fps=args.fps)
+            print(f"Saved generated video to {output_path}")
+            saved += 1
+        else:
+            print(f"Pipeline returned None at t={time_sec:.1f}s — generation failed.")
+
+    print(f"\nDone. Saved {saved}/{len(times)} generated video(s) to {args.output_dir}")
 
 
 if __name__ == "__main__":
