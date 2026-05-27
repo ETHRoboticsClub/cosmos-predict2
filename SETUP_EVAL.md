@@ -81,4 +81,28 @@ uv run python scripts/run_lerobot_inference.py \
     --episode 0 \
     --dit_path checkpoints/Cosmos-Predict2-2B-Video2World/model.pt
 ```
-7. copy result in s3: aws s3 cp generated_video.mp4 s3://ethrc-ml-data-916780037007/robot-learning/cosmos-2-eval/file.mp4
+
+Generated videos are written to `output/` by default (e.g. `generated_*.mp4`).
+
+### 10. Upload results to S3
+
+Use `scripts/upload_eval_videos_to_s3.sh` to upload every `.mp4` in the output folder. Basenames are preserved under the S3 prefix.
+
+```bash
+# Default prefix: s3://ethrc-ml-data-916780037007/robot-learning/cosmos-2-eval/
+./scripts/upload_eval_videos_to_s3.sh output
+
+# Optional: upload into a run-specific subfolder
+./scripts/upload_eval_videos_to_s3.sh output \
+  s3://ethrc-ml-data-916780037007/robot-learning/cosmos-2-eval/yams-ep0/
+
+# Preview commands without uploading
+DRY_RUN=1 ./scripts/upload_eval_videos_to_s3.sh output
+```
+
+Requires AWS credentials (e.g. `aws login --remote` from step 7). For a single file instead of a folder, use `aws s3 cp` directly:
+
+```bash
+aws s3 cp output/generated_0s.mp4 \
+  s3://ethrc-ml-data-916780037007/robot-learning/cosmos-2-eval/generated_0s.mp4
+```
