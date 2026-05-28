@@ -104,6 +104,30 @@ cu126 = [
   "nvidia-nvjitlink-cu12==12.6.85",
   "nvidia-nvtx-cu12==12.6.77",
 ]
+cu128 = [
+  "apex==0.1.0",
+  "flash-attn==2.7.4",
+  "natten==0.21.0",
+  "torch==2.7.0",
+  "torchvision==0.22.0",
+  "transformer-engine==2.2",
+  # Torch dependencies
+  # Dependencies determined from `uv pip install "torch==2.7.0" --index-url https://download.pytorch.org/whl/cu128`
+  # Issue: https://github.com/astral-sh/uv/issues/14237
+  "nvidia-cublas-cu12==12.8.4.1",
+  "nvidia-cuda-cupti-cu12==12.8.90",
+  "nvidia-cuda-nvrtc-cu12==12.8.89",
+  "nvidia-cuda-runtime-cu12==12.8.89",
+  "nvidia-cudnn-cu12==9.10.1.4",
+  "nvidia-cufft-cu12==11.4.1.4",
+  "nvidia-curand-cu12==10.3.9.90",
+  "nvidia-cusolver-cu12==11.7.3.90",
+  "nvidia-cusparse-cu12==12.8.0.52",
+  "nvidia-cusparselt-cu12==0.7.1",
+  "nvidia-nccl-cu12==2.26.2.1",
+  "nvidia-nvjitlink-cu12==12.8.89",
+  "nvidia-nvtx-cu12==12.8.89",
+]
 
 [project.readme]
 content-type = "text/markdown"
