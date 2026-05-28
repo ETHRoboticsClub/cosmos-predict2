@@ -61,24 +61,29 @@ def load_pipeline(lora_checkpoint: str | None) -> Video2WorldPipeline:
     )
 
     if lora_checkpoint:
-        print(f"Injecting LoRA and loading fine-tuned weights from {lora_checkpoint}")
-        from peft import LoraConfig, inject_adapter_in_model
-
         from cosmos_predict2.models.utils import load_state_dict
-
-        lora_cfg = LoraConfig(
-            r=_LORA_RANK,
-            lora_alpha=_LORA_ALPHA,
-            init_lora_weights=True,
-            target_modules=_LORA_TARGET_MODULES.split(","),
-        )
-        pipe.dit = inject_adapter_in_model(lora_cfg, pipe.dit)
 
         state_dict = load_state_dict(lora_checkpoint)
         # Prefer EMA weights; fall back to regular weights
         weights = {k[8:]: v for k, v in state_dict.items() if k.startswith("net_ema.")}
         if not weights:
             weights = {k[4:]: v for k, v in state_dict.items() if k.startswith("net.")}
+
+        is_lora = any("lora_A" in k or "lora_B" in k for k in weights)
+        if is_lora:
+            print(f"Injecting LoRA and loading fine-tuned weights from {lora_checkpoint}")
+            from peft import LoraConfig, inject_adapter_in_model
+
+            lora_cfg = LoraConfig(
+                r=_LORA_RANK,
+                lora_alpha=_LORA_ALPHA,
+                init_lora_weights=True,
+                target_modules=_LORA_TARGET_MODULES.split(","),
+            )
+            pipe.dit = inject_adapter_in_model(lora_cfg, pipe.dit)
+        else:
+            print(f"Loading fused fine-tuned weights from {lora_checkpoint}")
+
         pipe.dit.load_state_dict(weights, strict=False)
         pipe.dit = pipe.dit.to(device="cuda", dtype=torch.bfloat16)
 
