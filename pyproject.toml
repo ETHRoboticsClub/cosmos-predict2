@@ -156,30 +156,47 @@ no-build-package = [
 required-environments = [
     "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
+conflicts = [
+  [
+    { extra = "cu126" },
+    { extra = "cu128" },
+  ],
+]
 
 [tool.uv.sources]
 apex = [
   { index = "cosmos-cu126", extra = "cu126" },
+  { index = "cosmos-cu128", extra = "cu128" },
 ]
 flash-attn = [
   { index = "cosmos-cu126", extra = "cu126" },
+  { index = "cosmos-cu128", extra = "cu128" },
 ]
 natten = [
   { index = "cosmos-cu126", extra = "cu126" },
+  { index = "cosmos-cu128", extra = "cu128" },
 ]
 transformer-engine = [
   { index = "cosmos-cu126", extra = "cu126" },
+  { index = "cosmos-cu128", extra = "cu128" },
 ]
 torch = [
   { index = "cosmos-cu126", extra = "cu126" },
+  { index = "cosmos-cu128", extra = "cu128" },
 ]
 torchvision = [
   { index = "cosmos-cu126", extra = "cu126" },
+  { index = "cosmos-cu128", extra = "cu128" },
 ]
 
 [[tool.uv.index]]
 name = "cosmos-cu126"
 url = "https://nvidia-cosmos.github.io/cosmos-dependencies/cu126_torch260/simple"
+explicit = true
+
+[[tool.uv.index]]
+name = "cosmos-cu128"
+url = "https://nvidia-cosmos.github.io/cosmos-dependencies/cu128_torch270/simple"
 explicit = true
 
 [tool.hatch.build.targets.sdist]
