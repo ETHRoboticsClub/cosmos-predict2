@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${REPO_ROOT}"
+
+export UV_CACHE_DIR="${UV_CACHE_DIR:-${REPO_ROOT}/.uv-cache}"
+
 MIMIC_VIDEO_ROOT="${MIMIC_VIDEO_ROOT:-${HOME}/code/mimic-video}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${FROZEN_CHECKPOINT_DIR:-${MIMIC_VIDEO_ROOT}/model/checkpoints}}"
 T5_DIR="${T5_DIR:-${CHECKPOINT_DIR}/text_encoder/t5-11b}"
