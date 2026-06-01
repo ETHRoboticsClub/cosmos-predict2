@@ -78,6 +78,11 @@ class TeleopRawDataset(Dataset):
 
         episodes = self._discover_episodes(episode_glob)
         self.episodes = self._apply_split(episodes, split, val_fraction, split_seed)
+        if not self.episodes:
+            raise ValueError(
+                f"Split {split!r} produced 0 episodes from {len(episodes)} discovered episodes. "
+                "Adjust val_fraction or split."
+            )
         if require_embeddings:
             self._check_embeddings()
         if preload_embeddings:
@@ -174,7 +179,7 @@ class TeleopRawDataset(Dataset):
             raise FileNotFoundError(
                 f"Missing {len(missing)} unique instruction embeddings under {self.embedding_cache_dir}. "
                 f"First missing hash: {first_hash} for instruction {first_instruction!r}. "
-                "Run `python -m scripts.get_t5_embeddings_from_teleop_raw --dataset_path ...` first."
+                "Run `python -m scripts.get_t5_embeddings_from_teleop_raw --dataset_path ... --overwrite` first."
             )
 
     def _preload_embeddings(self) -> None:
@@ -301,5 +306,10 @@ class TeleopRawDataset(Dataset):
             warnings.warn("FULL TRACEBACK:")  # noqa: B028
             warnings.warn(traceback.format_exc())  # noqa: B028
             self.wrong_number += 1
+            if self.wrong_number > len(self.episodes) * 3:
+                raise RuntimeError(
+                    f"Too many invalid teleop samples ({self.wrong_number}); "
+                    "check video lengths, camera_name, and embedding cache."
+                )
             log.info(self.wrong_number, rank0_only=False)
             return self[np.random.randint(len(self.episodes))]

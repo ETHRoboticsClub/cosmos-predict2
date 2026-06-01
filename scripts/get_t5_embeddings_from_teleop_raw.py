@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episode_glob", type=str, default="*/episode_*", help="Glob relative to dataset_path")
     parser.add_argument("--max_length", type=int, help="Maximum length of the text embedding")
     parser.add_argument("--cache_dir", type=str, default=T5_MODEL_DIR, help="Directory containing the T5 model")
+    parser.add_argument("--overwrite", action="store_true", help="Regenerate existing instruction embedding files")
     return parser.parse_args()
 
 
@@ -70,7 +71,7 @@ def main(args: argparse.Namespace) -> None:
 
     for digest, instruction in tqdm(sorted(instructions.items())):
         t5_xxl_filename = output_dir / f"{digest}.pickle"
-        if t5_xxl_filename.exists():
+        if t5_xxl_filename.exists() and not args.overwrite:
             continue
 
         encoded_text, mask_bool = encoder.encode_prompts(instruction, max_length=args.max_length, return_mask=True)

@@ -5,7 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 log() {
-  printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*"
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
 
 if [[ -z "${NVME_DIR:-}" ]]; then
@@ -39,6 +39,7 @@ T5_DIR="${T5_DIR:-${CHECKPOINT_DIR}/text_encoder/t5-11b}"
 DATASET_PATH="${DATASET_PATH:-${MIMIC_VIDEO_ROOT}/data/teleop_raw}"
 EMBEDDING_CACHE_DIR="${EMBEDDING_CACHE_DIR:-${DATASET_PATH}/t5_xxl_instruction_cache}"
 CAMERA_NAME="${CAMERA_NAME:-camera_top}"
+EPISODE_GLOB="${EPISODE_GLOB:-*/episode_*}"
 VIDEO_SIZE="${VIDEO_SIZE:-256,256}"
 NUM_FRAMES="${NUM_FRAMES:-93}"
 VAL_FRACTION="${VAL_FRACTION:-0.1}"
@@ -92,6 +93,7 @@ fi
 log "Repo root: ${REPO_ROOT}"
 log "Mimic-video root: ${MIMIC_VIDEO_ROOT}"
 log "Dataset path: ${DATASET_PATH}"
+log "Episode glob: ${EPISODE_GLOB}"
 log "Embedding cache: ${EMBEDDING_CACHE_DIR}"
 log "T5 checkpoint: ${T5_DIR}"
 log "UV cache: ${UV_CACHE_DIR}"
@@ -104,20 +106,23 @@ log "CUDA extra: ${UV_EXTRA}"
 log "Training: NPROC=${NPROC}, context_parallel=${CONTEXT_PARALLEL_SIZE}, batch=${BATCH_SIZE}, val_batch=${VAL_BATCH_SIZE}"
 
 log "Syncing uv environment: uv sync ${UV_SYNC_ARGS}"
-uv sync ${UV_SYNC_ARGS}
+read -r -a uv_sync_args <<< "${UV_SYNC_ARGS}"
+read -r -a uv_run_args <<< "${UV_RUN_ARGS}"
+uv sync "${uv_sync_args[@]}"
 
 if [[ "${SKIP_EMBEDDINGS}" != "1" ]]; then
   log "Preparing unique instruction embeddings"
-  uv run ${UV_RUN_ARGS} python -m scripts.get_t5_embeddings_from_teleop_raw \
+  uv run "${uv_run_args[@]}" python -m scripts.get_t5_embeddings_from_teleop_raw \
     --dataset_path "${DATASET_PATH}" \
     --output_dir "${EMBEDDING_CACHE_DIR}" \
+    --episode_glob "${EPISODE_GLOB}" \
     --cache_dir "${T5_DIR}"
 else
   log "Skipping embedding preparation because SKIP_EMBEDDINGS=1"
 fi
 
 log "Launching training"
-IMAGINAIRE_OUTPUT_ROOT="${OUTPUT_ROOT}" uv run ${UV_RUN_ARGS} torchrun \
+IMAGINAIRE_OUTPUT_ROOT="${OUTPUT_ROOT}" uv run "${uv_run_args[@]}" torchrun \
   --nproc_per_node="${NPROC}" \
   --master_port="${MASTER_PORT}" \
   -m scripts.train \
@@ -137,6 +142,8 @@ IMAGINAIRE_OUTPUT_ROOT="${OUTPUT_ROOT}" uv run ${UV_RUN_ARGS} torchrun \
   dataloader_val.dataset.val_fraction="${VAL_FRACTION}" \
   dataloader_train.dataset.split_seed="${SPLIT_SEED}" \
   dataloader_val.dataset.split_seed="${SPLIT_SEED}" \
+  dataloader_train.dataset.episode_glob="${EPISODE_GLOB}" \
+  dataloader_val.dataset.episode_glob="${EPISODE_GLOB}" \
   dataloader_train.batch_size="${BATCH_SIZE}" \
   dataloader_val.batch_size="${VAL_BATCH_SIZE}" \
   dataloader_train.num_workers="${NUM_WORKERS}" \
