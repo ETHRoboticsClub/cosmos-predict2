@@ -35,7 +35,11 @@ def instruction_hash(instruction: str) -> str:
 
 def collect_instructions(dataset_path: Path, episode_glob: str) -> dict[str, str]:
     instructions: dict[str, str] = {}
-    for episode_dir in sorted(dataset_path.glob(episode_glob)):
+    candidate_episode_dirs = [path for path in sorted(dataset_path.glob(episode_glob)) if path.is_dir()]
+    if not candidate_episode_dirs:
+        candidate_episode_dirs = sorted({path.parent for path in dataset_path.rglob("session_meta.json")})
+
+    for episode_dir in candidate_episode_dirs:
         session_meta_path = episode_dir / "session_meta.json"
         if not session_meta_path.exists():
             continue

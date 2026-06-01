@@ -53,6 +53,7 @@ class TeleopRawDataset(Dataset):
         val_fraction: float = 0.1,
         split_seed: int = 42,
         require_embeddings: bool = True,
+        preload_embeddings: bool = True,
     ) -> None:
         """Dataset for raw teleop episodes with one or more camera MP4s.
 
@@ -73,12 +74,14 @@ class TeleopRawDataset(Dataset):
             self.dataset_dir / "t5_xxl_instruction_cache"
         )
         self.preprocess = T.Compose([ToTensorVideo(), Resize_Preprocess(tuple(video_size))])
-        self._t5_cache: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+        self._t5_cache: dict[str, tuple[torch.Tensor, torch.Tensor, Path]] = {}
 
         episodes = self._discover_episodes(episode_glob)
         self.episodes = self._apply_split(episodes, split, val_fraction, split_seed)
         if require_embeddings:
             self._check_embeddings()
+        if preload_embeddings:
+            self._preload_embeddings()
         self.wrong_number = 0
 
         log.info(
@@ -96,7 +99,11 @@ class TeleopRawDataset(Dataset):
         episodes: list[TeleopEpisode] = []
         video_filename = f"{self.camera_name}-images-rgb.mp4"
 
-        for episode_dir in sorted(self.dataset_dir.glob(episode_glob)):
+        candidate_episode_dirs = [path for path in sorted(self.dataset_dir.glob(episode_glob)) if path.is_dir()]
+        if not candidate_episode_dirs:
+            candidate_episode_dirs = sorted({path.parent for path in self.dataset_dir.rglob("session_meta.json")})
+
+        for episode_dir in candidate_episode_dirs:
             if not episode_dir.is_dir():
                 continue
 
@@ -170,6 +177,18 @@ class TeleopRawDataset(Dataset):
                 "Run `python -m scripts.get_t5_embeddings_from_teleop_raw --dataset_path ...` first."
             )
 
+    def _preload_embeddings(self) -> None:
+        instruction_index_path = self.embedding_cache_dir / "instruction_index.json"
+        if instruction_index_path.exists():
+            with open(instruction_index_path) as fp:
+                self.instruction_index = json.load(fp)
+        else:
+            self.instruction_index = {}
+
+        for episode in self.episodes:
+            if episode.instruction_hash not in self._t5_cache:
+                self._t5_cache[episode.instruction_hash] = self._load_t5_embedding(episode)
+
     def _load_video(self, video_path: Path) -> tuple[np.ndarray, float]:
         vr = VideoReader(str(video_path), ctx=cpu(0), num_threads=2)
         total_frames = len(vr)
@@ -201,13 +220,8 @@ class TeleopRawDataset(Dataset):
         frames = torch.clamp(frames * 255.0, 0, 255).to(torch.uint8)
         return frames, fps
 
-    def _get_t5_embedding(self, episode: TeleopEpisode) -> tuple[torch.Tensor, torch.Tensor, Path]:
+    def _load_t5_embedding(self, episode: TeleopEpisode) -> tuple[torch.Tensor, torch.Tensor, Path]:
         embedding_path = self.embedding_cache_dir / f"{episode.instruction_hash}.pickle"
-        cache_key = str(embedding_path.resolve())
-        cached = self._t5_cache.get(cache_key)
-        if cached is not None:
-            return cached[0], cached[1], embedding_path
-
         if not embedding_path.exists():
             raise FileNotFoundError(
                 f"Missing T5 embedding for instruction {episode.instruction!r}: {embedding_path}. "
@@ -238,9 +252,14 @@ class TeleopRawDataset(Dataset):
 
         t5_text_mask = torch.zeros(CosmosTextEncoderConfig.NUM_TOKENS, dtype=torch.int64)
         t5_text_mask[:n_tokens] = 1
-        cached_tensors = (torch.from_numpy(t5_embedding), t5_text_mask)
-        self._t5_cache[cache_key] = cached_tensors
-        return cached_tensors[0], cached_tensors[1], embedding_path
+        return torch.from_numpy(t5_embedding), t5_text_mask, embedding_path
+
+    def _get_t5_embedding(self, episode: TeleopEpisode) -> tuple[torch.Tensor, torch.Tensor, Path]:
+        cached = self._t5_cache.get(episode.instruction_hash)
+        if cached is None:
+            cached = self._load_t5_embedding(episode)
+            self._t5_cache[episode.instruction_hash] = cached
+        return cached
 
     def __getitem__(self, index) -> dict | Any:
         try:
