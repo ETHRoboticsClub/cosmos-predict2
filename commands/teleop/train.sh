@@ -26,6 +26,14 @@ fi
 
 mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT:-${REPO_ROOT}/.venv}")" "${UV_CACHE_DIR}"
 
+if [[ -z "${COSMOS_CHECKPOINT_DIR:-}" ]]; then
+  if [[ -n "${NVME_DIR:-}" ]]; then
+    COSMOS_CHECKPOINT_DIR="${NVME_DIR}/cosmos-predict2-checkpoints"
+  else
+    COSMOS_CHECKPOINT_DIR="${REPO_ROOT}/checkpoints"
+  fi
+fi
+
 if [[ -z "${MIMIC_VIDEO_ROOT:-}" ]]; then
   if [[ -d "/mnt/mimic-video-ebs/mimic-video" ]]; then
     MIMIC_VIDEO_ROOT="/mnt/mimic-video-ebs/mimic-video"
@@ -35,6 +43,9 @@ if [[ -z "${MIMIC_VIDEO_ROOT:-}" ]]; then
 fi
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${FROZEN_CHECKPOINT_DIR:-${MIMIC_VIDEO_ROOT}/model/checkpoints}}"
 T5_DIR="${T5_DIR:-${CHECKPOINT_DIR}/text_encoder/t5-11b}"
+COSMOS_MODEL_DIR="${COSMOS_CHECKPOINT_DIR}/nvidia/Cosmos-Predict2-2B-Video2World"
+COSMOS_TOKENIZER="${COSMOS_MODEL_DIR}/tokenizer/tokenizer.pth"
+COSMOS_MODEL="${COSMOS_MODEL_DIR}/model-480p-10fps.pt"
 
 DATASET_PATH="${DATASET_PATH:-${MIMIC_VIDEO_ROOT}/data/teleop_raw}"
 EMBEDDING_CACHE_DIR="${EMBEDDING_CACHE_DIR:-${DATASET_PATH}/t5_xxl_instruction_cache}"
@@ -63,6 +74,8 @@ if [[ -z "${UV_RUN_ARGS:-}" ]]; then
     UV_RUN_ARGS="--extra ${UV_EXTRA}"
   fi
 fi
+read -r -a uv_sync_args <<< "${UV_SYNC_ARGS}"
+read -r -a uv_run_args <<< "${UV_RUN_ARGS}"
 
 BATCH_SIZE="${BATCH_SIZE:-1}"
 VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-1}"
@@ -77,6 +90,7 @@ SAVE_ITER="${SAVE_ITER:-500}"
 LR="${LR:-1.778e-4}"
 
 SKIP_EMBEDDINGS="${SKIP_EMBEDDINGS:-0}"
+DOWNLOAD_COSMOS_CHECKPOINTS="${DOWNLOAD_COSMOS_CHECKPOINTS:-1}"
 
 if [[ ! -d "${DATASET_PATH}" ]]; then
   echo "Dataset path does not exist: ${DATASET_PATH}" >&2
@@ -90,12 +104,19 @@ if [[ ! -d "${T5_DIR}" ]]; then
   exit 1
 fi
 
+mkdir -p "${COSMOS_CHECKPOINT_DIR}"
+
+export COSMOS_PREDICT2_ARGS="${COSMOS_PREDICT2_ARGS:---checkpoints ${COSMOS_CHECKPOINT_DIR}}"
+
 log "Repo root: ${REPO_ROOT}"
 log "Mimic-video root: ${MIMIC_VIDEO_ROOT}"
 log "Dataset path: ${DATASET_PATH}"
 log "Episode glob: ${EPISODE_GLOB}"
 log "Embedding cache: ${EMBEDDING_CACHE_DIR}"
 log "T5 checkpoint: ${T5_DIR}"
+log "Frozen checkpoints: ${CHECKPOINT_DIR}"
+log "Cosmos checkpoints: ${COSMOS_CHECKPOINT_DIR}"
+log "COSMOS_PREDICT2_ARGS: ${COSMOS_PREDICT2_ARGS}"
 log "UV cache: ${UV_CACHE_DIR}"
 if [[ -n "${UV_PROJECT_ENVIRONMENT:-}" ]]; then
   log "UV venv: ${UV_PROJECT_ENVIRONMENT}"
@@ -106,9 +127,25 @@ log "CUDA extra: ${UV_EXTRA}"
 log "Training: NPROC=${NPROC}, context_parallel=${CONTEXT_PARALLEL_SIZE}, batch=${BATCH_SIZE}, val_batch=${VAL_BATCH_SIZE}"
 
 log "Syncing uv environment: uv sync ${UV_SYNC_ARGS}"
-read -r -a uv_sync_args <<< "${UV_SYNC_ARGS}"
-read -r -a uv_run_args <<< "${UV_RUN_ARGS}"
 uv sync "${uv_sync_args[@]}"
+
+if [[ ! -f "${COSMOS_TOKENIZER}" || ! -f "${COSMOS_MODEL}" ]]; then
+  if [[ "${DOWNLOAD_COSMOS_CHECKPOINTS}" == "1" ]]; then
+    log "Downloading Cosmos 2B Video2World 480p/10fps checkpoints into ${COSMOS_CHECKPOINT_DIR}"
+    uv run "${uv_run_args[@]}" python scripts/download_checkpoints.py \
+      --checkpoint_dir "${COSMOS_CHECKPOINT_DIR}" \
+      --model_sizes 2B \
+      --model_types video2world \
+      --resolution 480 \
+      --fps 10
+  else
+    echo "Missing Cosmos checkpoint files:" >&2
+    echo "  ${COSMOS_TOKENIZER}" >&2
+    echo "  ${COSMOS_MODEL}" >&2
+    echo "Set CHECKPOINT_DIR/FROZEN_CHECKPOINT_DIR to the Cosmos checkpoint root, or rerun with DOWNLOAD_COSMOS_CHECKPOINTS=1." >&2
+    exit 1
+  fi
+fi
 
 if [[ "${SKIP_EMBEDDINGS}" != "1" ]]; then
   log "Preparing unique instruction embeddings"
