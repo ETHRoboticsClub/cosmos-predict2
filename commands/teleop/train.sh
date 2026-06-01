@@ -16,6 +16,7 @@ SPLIT_SEED="${SPLIT_SEED:-42}"
 NPROC="${NPROC:-8}"
 MASTER_PORT="${MASTER_PORT:-12341}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-outputs}"
+UV_EXTRA="${UV_EXTRA:-cu126}"
 
 BATCH_SIZE="${BATCH_SIZE:-4}"
 VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-4}"
@@ -31,27 +32,16 @@ LR="${LR:-1.778e-4}"
 
 SKIP_EMBEDDINGS="${SKIP_EMBEDDINGS:-0}"
 
-if [[ -z "${PYTHON:-}" ]]; then
-  if [[ -x ".venv/bin/python" ]]; then
-    PYTHON=".venv/bin/python"
-  elif command -v python3 >/dev/null 2>&1; then
-    PYTHON="python3"
-  elif command -v uv >/dev/null 2>&1; then
-    PYTHON="uv run python"
-  else
-    echo "Could not find Python. Set PYTHON=/path/to/python and rerun." >&2
-    exit 1
-  fi
-fi
+uv sync --extra "${UV_EXTRA}"
 
 if [[ "${SKIP_EMBEDDINGS}" != "1" ]]; then
-  ${PYTHON} -m scripts.get_t5_embeddings_from_teleop_raw \
+  uv run python -m scripts.get_t5_embeddings_from_teleop_raw \
     --dataset_path "${DATASET_PATH}" \
     --output_dir "${EMBEDDING_CACHE_DIR}" \
     --cache_dir "${T5_DIR}"
 fi
 
-IMAGINAIRE_OUTPUT_ROOT="${OUTPUT_ROOT}" torchrun \
+IMAGINAIRE_OUTPUT_ROOT="${OUTPUT_ROOT}" uv run torchrun \
   --nproc_per_node="${NPROC}" \
   --master_port="${MASTER_PORT}" \
   -m scripts.train \
