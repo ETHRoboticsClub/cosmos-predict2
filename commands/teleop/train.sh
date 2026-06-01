@@ -17,6 +17,8 @@ NPROC="${NPROC:-8}"
 MASTER_PORT="${MASTER_PORT:-12341}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-outputs}"
 UV_EXTRA="${UV_EXTRA:-cu126}"
+UV_SYNC_ARGS="${UV_SYNC_ARGS:---frozen --extra ${UV_EXTRA}}"
+UV_RUN_ARGS="${UV_RUN_ARGS:---frozen --extra ${UV_EXTRA}}"
 
 BATCH_SIZE="${BATCH_SIZE:-4}"
 VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-4}"
@@ -32,16 +34,16 @@ LR="${LR:-1.778e-4}"
 
 SKIP_EMBEDDINGS="${SKIP_EMBEDDINGS:-0}"
 
-uv sync --extra "${UV_EXTRA}"
+uv sync ${UV_SYNC_ARGS}
 
 if [[ "${SKIP_EMBEDDINGS}" != "1" ]]; then
-  uv run python -m scripts.get_t5_embeddings_from_teleop_raw \
+  uv run ${UV_RUN_ARGS} python -m scripts.get_t5_embeddings_from_teleop_raw \
     --dataset_path "${DATASET_PATH}" \
     --output_dir "${EMBEDDING_CACHE_DIR}" \
     --cache_dir "${T5_DIR}"
 fi
 
-IMAGINAIRE_OUTPUT_ROOT="${OUTPUT_ROOT}" uv run torchrun \
+IMAGINAIRE_OUTPUT_ROOT="${OUTPUT_ROOT}" uv run ${UV_RUN_ARGS} torchrun \
   --nproc_per_node="${NPROC}" \
   --master_port="${MASTER_PORT}" \
   -m scripts.train \
