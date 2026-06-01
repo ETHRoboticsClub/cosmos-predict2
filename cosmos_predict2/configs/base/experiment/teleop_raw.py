@@ -60,7 +60,7 @@ dataloader_val_teleop_raw = L(DataLoader)(
 predict2_video2world_training_2b_teleop_raw = dict(
     defaults=[
         {"override /model": "predict2_video2world_fsdp_2b_480p_10fps"},
-        {"override /optimizer": "fusedadamw"},
+        {"override /optimizer": "adamw"},
         {"override /scheduler": "constant"},
         {"override /ckpt_type": "standard"},
         "_self_",

@@ -18,7 +18,6 @@ from hydra.core.config_store import ConfigStore
 from omegaconf import ListConfig
 from torch import nn
 
-from cosmos_predict2.utils.fused_adam_dtensor import FusedAdam
 from cosmos_predict2.utils.optim_instantiate_dtensor import get_base_optimizer
 from imaginaire.lazy_config import PLACEHOLDER, LazyDict
 from imaginaire.lazy_config import LazyCall as L
@@ -60,6 +59,8 @@ def get_base_optimizer_simple(
     if optim_type == "adamw":
         opt_cls = torch.optim.AdamW
     elif optim_type == "fusedadam":
+        from cosmos_predict2.utils.fused_adam_dtensor import FusedAdam
+
         opt_cls = FusedAdam
     else:
         raise ValueError(f"Unknown optimizer type: {optim_type}")
@@ -82,7 +83,18 @@ FusedAdamWConfig: LazyDict[torch.optim.Optimizer] = L(get_base_optimizer)(
     capturable=True,
 )
 
+AdamWConfig: LazyDict[torch.optim.Optimizer] = L(get_base_optimizer)(
+    model=PLACEHOLDER,
+    lr=1e-4,
+    weight_decay=0.1,
+    betas=[0.9, 0.99],
+    optim_type="adamw",
+    eps=1e-8,
+    capturable=True,
+)
+
 
 def register_optimizer():
     cs = ConfigStore.instance()
     cs.store(group="optimizer", package="optimizer", name="fusedadamw", node=FusedAdamWConfig)
+    cs.store(group="optimizer", package="optimizer", name="adamw", node=AdamWConfig)

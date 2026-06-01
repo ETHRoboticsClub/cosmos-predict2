@@ -4,9 +4,31 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-export UV_CACHE_DIR="${UV_CACHE_DIR:-${REPO_ROOT}/.uv-cache}"
+if [[ -z "${NVME_DIR:-}" ]]; then
+  for candidate in /mnt/nvme /mnt/local_nvme /local_nvme /mnt/instance-store /scratch; do
+    if [[ -d "${candidate}" && -w "${candidate}" ]]; then
+      NVME_DIR="${candidate}"
+      break
+    fi
+  done
+fi
 
-MIMIC_VIDEO_ROOT="${MIMIC_VIDEO_ROOT:-${HOME}/code/mimic-video}"
+if [[ -n "${NVME_DIR:-}" ]]; then
+  export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-${NVME_DIR}/cosmos-predict2-venv}"
+  export UV_CACHE_DIR="${UV_CACHE_DIR:-${NVME_DIR}/uv-cache}"
+else
+  export UV_CACHE_DIR="${UV_CACHE_DIR:-${REPO_ROOT}/.uv-cache}"
+fi
+
+mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT:-${REPO_ROOT}/.venv}")" "${UV_CACHE_DIR}"
+
+if [[ -z "${MIMIC_VIDEO_ROOT:-}" ]]; then
+  if [[ -d "/mnt/mimic-video-ebs/mimic-video" ]]; then
+    MIMIC_VIDEO_ROOT="/mnt/mimic-video-ebs/mimic-video"
+  else
+    MIMIC_VIDEO_ROOT="${HOME}/code/mimic-video"
+  fi
+fi
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${FROZEN_CHECKPOINT_DIR:-${MIMIC_VIDEO_ROOT}/model/checkpoints}}"
 T5_DIR="${T5_DIR:-${CHECKPOINT_DIR}/text_encoder/t5-11b}"
 
@@ -21,9 +43,21 @@ SPLIT_SEED="${SPLIT_SEED:-42}"
 NPROC="${NPROC:-8}"
 MASTER_PORT="${MASTER_PORT:-12341}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-outputs}"
-UV_EXTRA="${UV_EXTRA:-cu126}"
-UV_SYNC_ARGS="${UV_SYNC_ARGS:---frozen --extra ${UV_EXTRA}}"
-UV_RUN_ARGS="${UV_RUN_ARGS:---frozen --extra ${UV_EXTRA}}"
+UV_EXTRA="${UV_EXTRA:-cu128}"
+if [[ -z "${UV_SYNC_ARGS:-}" ]]; then
+  if [[ "${UV_EXTRA}" == "cu126" ]]; then
+    UV_SYNC_ARGS="--frozen --extra ${UV_EXTRA}"
+  else
+    UV_SYNC_ARGS="--extra ${UV_EXTRA}"
+  fi
+fi
+if [[ -z "${UV_RUN_ARGS:-}" ]]; then
+  if [[ "${UV_EXTRA}" == "cu126" ]]; then
+    UV_RUN_ARGS="--frozen --extra ${UV_EXTRA}"
+  else
+    UV_RUN_ARGS="--extra ${UV_EXTRA}"
+  fi
+fi
 
 BATCH_SIZE="${BATCH_SIZE:-4}"
 VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-4}"
@@ -38,6 +72,18 @@ SAVE_ITER="${SAVE_ITER:-500}"
 LR="${LR:-1.778e-4}"
 
 SKIP_EMBEDDINGS="${SKIP_EMBEDDINGS:-0}"
+
+if [[ ! -d "${DATASET_PATH}" ]]; then
+  echo "Dataset path does not exist: ${DATASET_PATH}" >&2
+  echo "Set DATASET_PATH=/path/to/teleop_raw or MIMIC_VIDEO_ROOT=/path/to/mimic-video." >&2
+  exit 1
+fi
+
+if [[ ! -d "${T5_DIR}" ]]; then
+  echo "T5 checkpoint directory does not exist: ${T5_DIR}" >&2
+  echo "Set T5_DIR=/path/to/text_encoder/t5-11b or FROZEN_CHECKPOINT_DIR=/path/to/checkpoints." >&2
+  exit 1
+fi
 
 uv sync ${UV_SYNC_ARGS}
 
