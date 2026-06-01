@@ -4,6 +4,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 
+log() {
+  printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*"
+}
+
 if [[ -z "${NVME_DIR:-}" ]]; then
   for candidate in /mnt/nvme /mnt/local_nvme /local_nvme /mnt/instance-store /scratch; do
     if [[ -d "${candidate}" && -w "${candidate}" ]]; then
@@ -85,15 +89,34 @@ if [[ ! -d "${T5_DIR}" ]]; then
   exit 1
 fi
 
+log "Repo root: ${REPO_ROOT}"
+log "Mimic-video root: ${MIMIC_VIDEO_ROOT}"
+log "Dataset path: ${DATASET_PATH}"
+log "Embedding cache: ${EMBEDDING_CACHE_DIR}"
+log "T5 checkpoint: ${T5_DIR}"
+log "UV cache: ${UV_CACHE_DIR}"
+if [[ -n "${UV_PROJECT_ENVIRONMENT:-}" ]]; then
+  log "UV venv: ${UV_PROJECT_ENVIRONMENT}"
+else
+  log "UV venv: ${REPO_ROOT}/.venv"
+fi
+log "CUDA extra: ${UV_EXTRA}"
+log "Training: NPROC=${NPROC}, context_parallel=${CONTEXT_PARALLEL_SIZE}, batch=${BATCH_SIZE}, val_batch=${VAL_BATCH_SIZE}"
+
+log "Syncing uv environment: uv sync ${UV_SYNC_ARGS}"
 uv sync ${UV_SYNC_ARGS}
 
 if [[ "${SKIP_EMBEDDINGS}" != "1" ]]; then
+  log "Preparing unique instruction embeddings"
   uv run ${UV_RUN_ARGS} python -m scripts.get_t5_embeddings_from_teleop_raw \
     --dataset_path "${DATASET_PATH}" \
     --output_dir "${EMBEDDING_CACHE_DIR}" \
     --cache_dir "${T5_DIR}"
+else
+  log "Skipping embedding preparation because SKIP_EMBEDDINGS=1"
 fi
 
+log "Launching training"
 IMAGINAIRE_OUTPUT_ROOT="${OUTPUT_ROOT}" uv run ${UV_RUN_ARGS} torchrun \
   --nproc_per_node="${NPROC}" \
   --master_port="${MASTER_PORT}" \
