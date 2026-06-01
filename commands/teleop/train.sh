@@ -31,8 +31,21 @@ LR="${LR:-1.778e-4}"
 
 SKIP_EMBEDDINGS="${SKIP_EMBEDDINGS:-0}"
 
+if [[ -z "${PYTHON:-}" ]]; then
+  if [[ -x ".venv/bin/python" ]]; then
+    PYTHON=".venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    PYTHON="python3"
+  elif command -v uv >/dev/null 2>&1; then
+    PYTHON="uv run python"
+  else
+    echo "Could not find Python. Set PYTHON=/path/to/python and rerun." >&2
+    exit 1
+  fi
+fi
+
 if [[ "${SKIP_EMBEDDINGS}" != "1" ]]; then
-  python -m scripts.get_t5_embeddings_from_teleop_raw \
+  ${PYTHON} -m scripts.get_t5_embeddings_from_teleop_raw \
     --dataset_path "${DATASET_PATH}" \
     --output_dir "${EMBEDDING_CACHE_DIR}" \
     --cache_dir "${T5_DIR}"
