@@ -4,6 +4,20 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 
+if [[ -f "${REPO_ROOT}/.env.paths" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/.env.paths"
+  set +a
+fi
+
+if [[ -f "${REPO_ROOT}/.env.secrets" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/.env.secrets"
+  set +a
+fi
+
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
@@ -20,11 +34,19 @@ fi
 if [[ -n "${NVME_DIR:-}" ]]; then
   export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-${NVME_DIR}/cosmos-predict2-venv}"
   export UV_CACHE_DIR="${UV_CACHE_DIR:-${NVME_DIR}/uv-cache}"
+  export HF_HOME="${HF_HOME:-${NVME_DIR}/huggingface}"
+  export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
+  export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-${HF_HUB_CACHE}}"
+  export HF_XET_CACHE="${HF_XET_CACHE:-${HF_HOME}/xet}"
 else
   export UV_CACHE_DIR="${UV_CACHE_DIR:-${REPO_ROOT}/.uv-cache}"
+  export HF_HOME="${HF_HOME:-${REPO_ROOT}/.hf-cache}"
+  export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
+  export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-${HF_HUB_CACHE}}"
+  export HF_XET_CACHE="${HF_XET_CACHE:-${HF_HOME}/xet}"
 fi
 
-mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT:-${REPO_ROOT}/.venv}")" "${UV_CACHE_DIR}"
+mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT:-${REPO_ROOT}/.venv}")" "${UV_CACHE_DIR}" "${HF_HUB_CACHE}" "${HF_XET_CACHE}"
 
 if [[ -z "${COSMOS_CHECKPOINT_DIR:-}" ]]; then
   if [[ -n "${NVME_DIR:-}" ]]; then
@@ -118,6 +140,9 @@ log "Frozen checkpoints: ${CHECKPOINT_DIR}"
 log "Cosmos checkpoints: ${COSMOS_CHECKPOINT_DIR}"
 log "COSMOS_PREDICT2_ARGS: ${COSMOS_PREDICT2_ARGS}"
 log "UV cache: ${UV_CACHE_DIR}"
+log "HF home: ${HF_HOME}"
+log "HF hub cache: ${HF_HUB_CACHE}"
+log "HF xet cache: ${HF_XET_CACHE}"
 if [[ -n "${UV_PROJECT_ENVIRONMENT:-}" ]]; then
   log "UV venv: ${UV_PROJECT_ENVIRONMENT}"
 else
