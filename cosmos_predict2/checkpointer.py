@@ -204,7 +204,7 @@ class Checkpointer:
             for key, checkpoint_path in state_dicts_paths.items():
                 self._check_checkpoint_exists(checkpoint_path)
                 log.info(f"Loading checkpoint (local): {checkpoint_path}")
-                state_dicts_to_load[key] = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
+                state_dicts_to_load[key] = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
                 log.success(f"Complete loading checkpoint (local): {checkpoint_path}")
             self.callbacks.on_load_checkpoint(model, state_dict=state_dicts_to_load)
 
@@ -298,6 +298,10 @@ class Checkpointer:
         Returns:
             checkpoint_file (str | None): file name of the latest saved checkpoint.
         """
+        if os.environ.get("COSMOS_DISABLE_AUTO_RESUME", "0") == "1":
+            log.info("Ignoring latest checkpoint because COSMOS_DISABLE_AUTO_RESUME=1")
+            return None
+
         checkpoint_file = None
         latest_path = os.path.join(self.checkpoint_dir_local, "latest_checkpoint.txt")
         if os.path.isfile(latest_path):

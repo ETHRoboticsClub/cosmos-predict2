@@ -146,7 +146,7 @@ class MultiRankCheckpointer(BaseCheckpointer):
         if checkpoint_path is not None:
             self._check_checkpoint_exists(checkpoint_path)
             log.info(f"Loading checkpoint (local): {checkpoint_path}")
-            state_dict = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
+            state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
             log.success(f"Complete loading checkpoint (local): {checkpoint_path}")
             self.callbacks.on_load_checkpoint(model, state_dict=state_dict)
             # Load the state dicts.

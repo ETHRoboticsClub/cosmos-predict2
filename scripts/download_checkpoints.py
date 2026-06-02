@@ -117,6 +117,11 @@ def parse_args():
         action="store_true",
         help="Dry run the script and print the download commands without actually downloading the files.",
     )
+    parser.add_argument(
+        "--skip_t5",
+        action="store_true",
+        help="Skip downloading google-t5/t5-11b when cached embeddings or another T5 path are already available.",
+    )
     args = parser.parse_args()
     return args
 
@@ -177,7 +182,8 @@ def main(args):
         download(f"nvidia/{MODEL_SIZE_MAPPING['14B']}-{MODEL_TYPE_MAPPING['sample_gr00t_dreams_droid']}")
 
     # Download T5 model
-    download("google-t5/t5-11b", ignore_patterns=["tf_model.h5"])
+    if not args.skip_t5:
+        download("google-t5/t5-11b", ignore_patterns=["tf_model.h5"])
 
     # Download the guardrail models
     download("nvidia/Cosmos-Guardrail1")

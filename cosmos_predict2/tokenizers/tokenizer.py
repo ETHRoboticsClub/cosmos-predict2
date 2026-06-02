@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import io
+import os
 from contextlib import nullcontext
 
 import torch
@@ -579,7 +580,8 @@ def _video_vae(
                 torch.randn(1, 16, 32, 1, 1, device=device),
             )
     else:
-        if get_rank() == 0:
+        load_on_all_ranks = os.environ.get("COSMOS_TOKENIZER_LOAD_ON_ALL_RANKS", "1") != "0"
+        if load_on_all_ranks or get_rank() == 0:
             ckpt = easy_io.load(
                 pretrained_path,
                 backend_key=None,
@@ -610,7 +612,10 @@ def _video_vae(
                     torch.randn(1, 16, 32, 1, 1, device=device),
                     torch.randn(1, 16, 32, 1, 1, device=device),
                 )
-    sync_model_states(model)
+    if pretrained_path is None or not load_on_all_ranks:
+        sync_model_states(model)
+    else:
+        log.info("Skipping tokenizer state sync because checkpoint was loaded on every rank")
 
     if load_mean_std:
         log.info("broadcast mean and std")
