@@ -97,14 +97,17 @@ if [[ -z "${UV_RUN_ARGS:-}" ]]; then
     UV_RUN_ARGS="--extra ${UV_EXTRA}"
   fi
 fi
+EXTRA_OVERRIDES="${EXTRA_OVERRIDES:-}"
 read -r -a uv_sync_args <<< "${UV_SYNC_ARGS}"
 read -r -a uv_run_args <<< "${UV_RUN_ARGS}"
+read -r -a extra_overrides <<< "${EXTRA_OVERRIDES}"
 
 BATCH_SIZE="${BATCH_SIZE:-1}"
 VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-1}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 VAL_NUM_WORKERS="${VAL_NUM_WORKERS:-4}"
 CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-1}"
+ATTEN_BACKEND="${ATTEN_BACKEND:-}"
 
 MAX_ITER="${MAX_ITER:-7000}"
 VALIDATION_ITER="${VALIDATION_ITER:-200}"
@@ -146,6 +149,12 @@ else
 fi
 log "CUDA extra: ${UV_EXTRA}"
 log "Training: NPROC=${NPROC}, context_parallel=${CONTEXT_PARALLEL_SIZE}, batch=${BATCH_SIZE}, val_batch=${VAL_BATCH_SIZE}"
+if [[ -n "${ATTEN_BACKEND}" ]]; then
+  log "Attention backend override: ${ATTEN_BACKEND}"
+fi
+if [[ "${#extra_overrides[@]}" -gt 0 ]]; then
+  log "Extra Hydra overrides: ${EXTRA_OVERRIDES}"
+fi
 log "Disable auto resume: ${DISABLE_AUTO_RESUME}"
 
 log "Syncing uv environment: uv sync ${UV_SYNC_ARGS}"
@@ -285,8 +294,10 @@ COSMOS_DISABLE_AUTO_RESUME="${DISABLE_AUTO_RESUME}" IMAGINAIRE_OUTPUT_ROOT="${OU
   dataloader_train.num_workers="${NUM_WORKERS}" \
   dataloader_val.num_workers="${VAL_NUM_WORKERS}" \
   model_parallel.context_parallel_size="${CONTEXT_PARALLEL_SIZE}" \
+  ${ATTEN_BACKEND:+model.config.pipe_config.net.atten_backend="${ATTEN_BACKEND}"} \
   trainer.max_iter="${MAX_ITER}" \
   trainer.validation_iter="${VALIDATION_ITER}" \
   trainer.max_val_iter="${MAX_VAL_ITER}" \
   checkpoint.save_iter="${SAVE_ITER}" \
-  optimizer.lr="${LR}"
+  optimizer.lr="${LR}" \
+  "${extra_overrides[@]}"

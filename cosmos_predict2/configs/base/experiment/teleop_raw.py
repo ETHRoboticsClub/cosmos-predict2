@@ -5,6 +5,7 @@ from hydra.core.config_store import ConfigStore
 from megatron.core import parallel_state
 from torch.utils.data import DataLoader, DistributedSampler
 
+from cosmos_predict2.callbacks.wandb_setup import WandbSetup
 from cosmos_predict2.data.dataset_teleop_raw import TeleopRawDataset
 from imaginaire.lazy_config import LazyCall as L
 
@@ -46,6 +47,7 @@ dataloader_train_teleop_raw = L(DataLoader)(
     batch_size=4,
     drop_last=True,
     num_workers=4,
+    persistent_workers=True,
     pin_memory=True,
 )
 dataloader_val_teleop_raw = L(DataLoader)(
@@ -54,6 +56,7 @@ dataloader_val_teleop_raw = L(DataLoader)(
     batch_size=4,
     drop_last=True,
     num_workers=4,
+    persistent_workers=True,
     pin_memory=True,
 )
 
@@ -93,6 +96,7 @@ predict2_video2world_training_2b_teleop_raw = dict(
         distributed_parallelism="fsdp",
         callbacks=dict(
             iter_speed=dict(hit_thres=10),
+            wandb_setup=L(WandbSetup)(),
         ),
         max_iter=7_000,
         run_validation=True,

@@ -53,6 +53,14 @@ class Checkpointer:
         self.only_load_scheduler_state = config_checkpoint.only_load_scheduler_state
         self.save_thread = None
 
+    @staticmethod
+    def _uses_fsdp(model: ImaginaireModel) -> bool:
+        return model.config.fsdp_shard_size != 0 and torch.distributed.is_initialized()
+
+    @staticmethod
+    def _uses_distributed_optimizer_checkpoint(model: ImaginaireModel) -> bool:
+        return Checkpointer._uses_fsdp(model) and distributed.get_world_size() > 1
+
     def save(
         self,
         model: ImaginaireModel,
@@ -74,9 +82,10 @@ class Checkpointer:
 
         checkpoint_file = f"iter_{iteration:09}.pt"
 
-        # Handle optimizer state dict if FSDP is enabled
-        is_fsdp = model.config.fsdp_shard_size != 0 and distributed.get_world_size() > 1
-        if is_fsdp:
+        # Single-rank FSDP still wraps params as DTensors, but PyTorchs
+        # distributed optimizer state API tries to broadcast those DTensors and
+        # cannot infer a DeviceMesh. Use it only when there are multiple ranks.
+        if self._uses_distributed_optimizer_checkpoint(model):
             optimizer_state_dict = get_optimizer_state_dict(
                 model,
                 optimizer,
@@ -171,7 +180,7 @@ class Checkpointer:
         assert self.load_path is None, "load_path is not supported yet"
         self.callbacks.on_load_checkpoint_start(model)
 
-        is_fsdp = model.config.fsdp_shard_size != 0 and distributed.get_world_size() > 1
+        is_fsdp = self._uses_fsdp(model)
 
         latest_checkpoint_file = self._read_latest_checkpoint_file()
         if latest_checkpoint_file is not None:
@@ -265,7 +274,7 @@ class Checkpointer:
             if resume:
                 assert optimizer
                 log.info("- Loading the optimizer...")
-                if is_fsdp:
+                if self._uses_distributed_optimizer_checkpoint(model):
                     set_optimizer_state_dict(
                         model,
                         optimizer,

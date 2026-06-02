@@ -234,6 +234,7 @@ dependencies = [
     { name = "decord", marker = "(python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux') or (python_full_version >= '3.11' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (platform_machine != 'x86_64' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (sys_platform != 'linux' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128')" },
     { name = "diffusers", marker = "(python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux') or (python_full_version >= '3.11' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (platform_machine != 'x86_64' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (sys_platform != 'linux' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128')" },
     { name = "einops", marker = "(python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux') or (python_full_version >= '3.11' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (platform_machine != 'x86_64' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (sys_platform != 'linux' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128')" },
+    { name = "ffmpeg", marker = "(python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux') or (python_full_version >= '3.11' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (platform_machine != 'x86_64' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (sys_platform != 'linux' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128')" },
     { name = "ffmpegcv", marker = "(python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux') or (python_full_version >= '3.11' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (platform_machine != 'x86_64' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (sys_platform != 'linux' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128')" },
     { name = "ftfy", marker = "(python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux') or (python_full_version >= '3.11' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (platform_machine != 'x86_64' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (sys_platform != 'linux' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128')" },
     { name = "fvcore", marker = "(python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux') or (python_full_version >= '3.11' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (platform_machine != 'x86_64' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128') or (sys_platform != 'linux' and extra == 'extra-15-cosmos-predict2-cu126' and extra == 'extra-15-cosmos-predict2-cu128')" },
@@ -327,6 +328,7 @@ requires-dist = [
     { name = "decord", specifier = "==0.6.0" },
     { name = "diffusers", specifier = "==0.33.1" },
     { name = "einops", specifier = "==0.8.1" },
+    { name = "ffmpeg", specifier = ">=1.4" },
     { name = "ffmpegcv", specifier = "==0.3.18" },
     { name = "flash-attn", marker = "extra == 'cu126'", specifier = "==2.6.3", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/cu126_torch260/simple", conflict = { package = "cosmos-predict2", extra = "cu126" } },
     { name = "flash-attn", marker = "extra == 'cu128'", specifier = "==2.7.3", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.2.0/cu128_torch27/simple", conflict = { package = "cosmos-predict2", extra = "cu128" } },
@@ -580,6 +582,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/5f/d4/e834d929be54bfadb
 wheels = [
     { url = "https://files.pythonhosted.org/packages/61/bf/fd60001b3abc5222d8eaa4a204cd8c0ae78e75adc688f33ce4bf25b7fafa/fasteners-0.19-py3-none-any.whl", hash = "sha256:758819cb5d94cdedf4e836988b74de396ceacb8e2794d21f82d131fd9ee77237", size = 18679, upload-time = "2023-09-19T17:11:18.725Z" },
 ]
+
+[[package]]
+name = "ffmpeg"
+version = "1.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f0/cc/3b7408b8ecf7c1d20ad480c3eaed7619857bf1054b690226e906fdf14258/ffmpeg-1.4.tar.gz", hash = "sha256:6931692c890ff21d39938433c2189747815dca0c60ddc7f9bb97f199dba0b5b9", size = 5055, upload-time = "2018-10-08T07:50:05.748Z" }
 
 [[package]]
 name = "ffmpegcv"
