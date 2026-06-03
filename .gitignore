@@ -198,7 +198,11 @@ cython_debug/
 
 /checkpoints
 /output
+/outputs
 /datasets
 /examples/**/checkpoints
 /examples/**/output
 /examples/**/datasets
+
+# Local Docker image exports
+docker-images/
