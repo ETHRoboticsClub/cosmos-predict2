@@ -16,6 +16,7 @@
 import argparse
 import os
 import pickle
+import shutil
 
 import numpy as np
 
@@ -52,14 +53,23 @@ def main(args) -> None:
     encoder_config = CosmosT5TextEncoderConfig(ckpt_path=args.cache_dir)
     encoder = CosmosT5TextEncoder(config=encoder_config)
 
+    prompt_to_t5_path = {}
     for meta_filename in metas_list:
         t5_xxl_filename = os.path.join(t5_xxl_dir, os.path.basename(meta_filename).replace(".txt", ".pickle"))
+        with open(meta_filename) as fp:
+            prompt = fp.read().strip()
+
         if os.path.exists(t5_xxl_filename):
+            prompt_to_t5_path.setdefault(prompt, t5_xxl_filename)
             # Skip if the file already exists
             continue
 
-        with open(meta_filename) as fp:
-            prompt = fp.read().strip()
+        if prompt in prompt_to_t5_path:
+            try:
+                os.link(prompt_to_t5_path[prompt], t5_xxl_filename)
+            except OSError:
+                shutil.copy2(prompt_to_t5_path[prompt], t5_xxl_filename)
+            continue
 
         # Compute T5 embeddings
         encoded_text, mask_bool = encoder.encode_prompts(
@@ -76,6 +86,9 @@ def main(args) -> None:
         # Save T5 embeddings as pickle file
         with open(t5_xxl_filename, "wb") as fp:
             pickle.dump(encoded_text, fp)
+        prompt_to_t5_path[prompt] = t5_xxl_filename
+
+    print(f"Prepared {len(metas_list)} embedding files from {len(prompt_to_t5_path)} unique prompts.")
 
 
 if __name__ == "__main__":

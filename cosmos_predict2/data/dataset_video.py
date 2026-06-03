@@ -14,7 +14,6 @@
 # limitations under the License.
 
 import os
-import pickle
 import time
 import traceback
 import warnings
@@ -27,7 +26,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms as T
 
 from cosmos_predict2.data.dataset_utils import Resize_Preprocess, ToTensorVideo
-from imaginaire.auxiliary.text_encoder import CosmosTextEncoderConfig
+from cosmos_predict2.data.embedding_cache import get_embedding_cache_key, load_t5_embedding_cached
 from imaginaire.utils import log
 
 """
@@ -73,6 +72,7 @@ class Dataset(Dataset):
         log.info(f"{len(self.video_paths)} videos in total")
 
         self.wrong_number = 0
+        self._t5_embedding_cache = {}
         self.preprocess = T.Compose([ToTensorVideo(), Resize_Preprocess(tuple(video_size))])
 
     def __str__(self) -> str:
@@ -138,30 +138,12 @@ class Dataset(Dataset):
 
             _, _, h, w = video.shape
 
-            # Just add these to fit the interface
-            with open(t5_embedding_path, "rb") as f:
-                t5_embedding_raw = pickle.load(f)
-                assert isinstance(t5_embedding_raw, list)
-                assert len(t5_embedding_raw) == 1
-                t5_embedding = t5_embedding_raw[0]  # [n_tokens, CosmosTextEncoderConfig.EMBED_DIM]
-                assert isinstance(t5_embedding, np.ndarray)
-                assert len(t5_embedding.shape) == 2
-            n_tokens = t5_embedding.shape[0]
-            if n_tokens < CosmosTextEncoderConfig.NUM_TOKENS:
-                t5_embedding = np.concatenate(
-                    [
-                        t5_embedding,
-                        np.zeros(
-                            (CosmosTextEncoderConfig.NUM_TOKENS - n_tokens, CosmosTextEncoderConfig.EMBED_DIM),
-                            dtype=np.float32,
-                        ),
-                    ],
-                    axis=0,
-                )
-            t5_text_mask = torch.zeros(CosmosTextEncoderConfig.NUM_TOKENS, dtype=torch.int64)
-            t5_text_mask[:n_tokens] = 1
+            cache_key = get_embedding_cache_key(t5_embedding_path)
+            t5_embedding, t5_text_mask = load_t5_embedding_cached(
+                self._t5_embedding_cache, cache_key, t5_embedding_path
+            )
 
-            data["t5_text_embeddings"] = torch.from_numpy(t5_embedding)
+            data["t5_text_embeddings"] = t5_embedding
             data["t5_text_mask"] = t5_text_mask
             data["fps"] = fps
             data["image_size"] = torch.tensor([h, w, h, w])
