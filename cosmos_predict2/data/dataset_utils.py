@@ -31,13 +31,16 @@ class Resize_Preprocess:
         self.mode = mode
 
     def _resize(self, frame):
+        _, input_h, input_w = frame.shape
+        target_h, target_w = self.size
+        if input_h == target_h and input_w == target_w:
+            return frame
+
         if self.mode == "resize":
             return F.resize(frame, self.size, antialias=True)
         if self.mode != "center_crop":
             raise ValueError(f"Unknown resize mode: {self.mode}")
 
-        target_h, target_w = self.size
-        _, input_h, input_w = frame.shape
         scale = max(target_h / input_h, target_w / input_w)
         resize_size = [math.ceil(input_h * scale), math.ceil(input_w * scale)]
         frame = F.resize(frame, resize_size, antialias=True)

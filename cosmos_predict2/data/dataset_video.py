@@ -79,6 +79,8 @@ class Dataset(Dataset):
 
         self.wrong_number = 0
         self._t5_embedding_cache = {}
+        self._last_load_profile = {}
+        self._slow_load_warn_s = float(os.getenv("COSMOS_SLOW_LOAD_WARN_S", "0.5"))
         self.preprocess = T.Compose([ToTensorVideo(), Resize_Preprocess(tuple(video_size), mode="center_crop")])
 
     def __str__(self) -> str:
@@ -104,8 +106,13 @@ class Dataset(Dataset):
         return normalized
 
     def _load_video(self, video_path, start_frame: int | None = None) -> tuple[np.ndarray, float]:
+        t_open0 = time.perf_counter()
         vr = VideoReader(video_path, ctx=cpu(0), num_threads=2)
+        t_open = time.perf_counter() - t_open0
+
+        t_len0 = time.perf_counter()
         total_frames = len(vr)
+        t_len = time.perf_counter() - t_len0
         if total_frames < self.sequence_length:
             # If there are not enough frames, let it fail
             warnings.warn(  # noqa: B028
@@ -128,22 +135,60 @@ class Dataset(Dataset):
         end_frame = start_frame + self.sequence_length
         frame_ids = np.arange(start_frame, end_frame).tolist()
 
+        t_decode0 = time.perf_counter()
         frame_data = vr.get_batch(frame_ids).asnumpy()
-        vr.seek(0)  # set video reader point back to 0 to clean up cache
+        t_decode = time.perf_counter() - t_decode0
 
+        t_seek0 = time.perf_counter()
+        vr.seek(0)  # set video reader point back to 0 to clean up cache
+        t_seek = time.perf_counter() - t_seek0
+
+        t_fps0 = time.perf_counter()
         try:
             fps = vr.get_avg_fps()
         except Exception:  # failed to read FPS, assume it is 16
             fps = 16
+        t_fps = time.perf_counter() - t_fps0
+
+        self._last_load_profile = {
+            "open_s": t_open,
+            "len_s": t_len,
+            "decode_s": t_decode,
+            "seek_s": t_seek,
+            "fps_s": t_fps,
+            "total_frames": total_frames,
+            "start_frame": start_frame,
+        }
         del vr  # delete the reader to avoid memory leak
         return frame_data, fps
 
     def _get_frames(self, video_path: str, start_frame: int | None = None) -> tuple[torch.Tensor, float]:
+        t_load0 = time.perf_counter()
         frames, fps = self._load_video(video_path, start_frame=start_frame)
+        t_load = time.perf_counter() - t_load0
+
+        t_cast0 = time.perf_counter()
         frames = frames.astype(np.uint8)
+        t_cast = time.perf_counter() - t_cast0
+
+        t_tensor0 = time.perf_counter()
         frames = torch.from_numpy(frames).permute(0, 3, 1, 2)  # [T, C, H, W]
+        t_tensor = time.perf_counter() - t_tensor0
+
+        t_resize0 = time.perf_counter()
         frames = self.preprocess(frames)
+        t_resize = time.perf_counter() - t_resize0
+
+        t_clamp0 = time.perf_counter()
         frames = torch.clamp(frames * 255.0, 0, 255).to(torch.uint8)
+        t_clamp = time.perf_counter() - t_clamp0
+
+        self._last_load_profile["load_video_s"] = t_load
+        self._last_load_profile["astype_s"] = t_cast
+        self._last_load_profile["to_tensor_s"] = t_tensor
+        self._last_load_profile["resize_s"] = t_resize
+        self._last_load_profile["clamp_s"] = t_clamp
+        self._last_load_profile["preprocess_s"] = t_cast + t_tensor + t_resize + t_clamp
         return frames, fps
 
     def _build_item(self, video_path: str, start_frame: int | None, source_index: int) -> dict | Any:
@@ -151,8 +196,18 @@ class Dataset(Dataset):
         _t0 = time.perf_counter()
         video, fps = self._get_frames(video_path, start_frame=start_frame)
         _load_s = time.perf_counter() - _t0
-        if _load_s > 0.5:
-            log.warning(f"Slow data load: {video_path} took {_load_s:.2f}s")
+        if _load_s > self._slow_load_warn_s:
+            p = self._last_load_profile
+            log.warning(
+                f"Slow data load: {video_path} took {_load_s:.2f}s "
+                f"(open={p.get('open_s', 0.0):.2f}s len={p.get('len_s', 0.0):.2f}s "
+                f"decode={p.get('decode_s', 0.0):.2f}s seek={p.get('seek_s', 0.0):.2f}s "
+                f"fps={p.get('fps_s', 0.0):.2f}s load_video={p.get('load_video_s', 0.0):.2f}s "
+                f"astype={p.get('astype_s', 0.0):.2f}s to_tensor={p.get('to_tensor_s', 0.0):.2f}s "
+                f"resize={p.get('resize_s', 0.0):.2f}s clamp={p.get('clamp_s', 0.0):.2f}s "
+                f"preprocess={p.get('preprocess_s', 0.0):.2f}s "
+                f"start={p.get('start_frame', -1)} total_frames={p.get('total_frames', -1)})"
+            )
         video = video.permute(1, 0, 2, 3)  # Rearrange from [T, C, H, W] to [C, T, H, W]
         t5_embedding_path = os.path.join(
             self.t5_dir,

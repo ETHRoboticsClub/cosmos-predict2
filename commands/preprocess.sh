@@ -12,6 +12,8 @@ MODE="${MODE:-symlink}"
 CAMERA_GLOB="${CAMERA_GLOB:-camera_top-images-rgb.mp4}"
 OVERWRITE="${OVERWRITE:-1}"
 TARGET_FPS="${TARGET_FPS-10}"
+TARGET_HEIGHT="${TARGET_HEIGHT:-480}"
+TARGET_WIDTH="${TARGET_WIDTH:-640}"
 VIDEO_ENCODER="${VIDEO_ENCODER:-auto}"
 FFMPEG_BIN="${FFMPEG_BIN:-ffmpeg}"
 VIDEO_CRF="${VIDEO_CRF:-18}"
@@ -30,6 +32,26 @@ fi
 
 if [[ -n "${TARGET_FPS}" && ! "${TARGET_FPS}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "TARGET_FPS must be numeric, or empty to disable FPS downsampling." >&2
+  exit 2
+fi
+
+if [[ -n "${TARGET_HEIGHT}" && ! "${TARGET_HEIGHT}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "TARGET_HEIGHT must be a positive integer, or empty to disable spatial resize/crop." >&2
+  exit 2
+fi
+
+if [[ -n "${TARGET_WIDTH}" && ! "${TARGET_WIDTH}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "TARGET_WIDTH must be a positive integer, or empty to disable spatial resize/crop." >&2
+  exit 2
+fi
+
+if [[ -n "${TARGET_HEIGHT}" && -z "${TARGET_WIDTH}" ]]; then
+  echo "TARGET_HEIGHT was set but TARGET_WIDTH is empty. Set both or leave both empty." >&2
+  exit 2
+fi
+
+if [[ -z "${TARGET_HEIGHT}" && -n "${TARGET_WIDTH}" ]]; then
+  echo "TARGET_WIDTH was set but TARGET_HEIGHT is empty. Set both or leave both empty." >&2
   exit 2
 fi
 
@@ -64,6 +86,7 @@ echo "  raw root:        ${RAW_ROOT}"
 echo "  output root:     ${OUT_ROOT}"
 echo "  mode:            ${MODE}"
 echo "  target fps:      ${TARGET_FPS:-native}"
+echo "  target size:     ${TARGET_HEIGHT:-native}x${TARGET_WIDTH:-native} (HxW)"
 echo "  encoder:         ${VIDEO_ENCODER}"
 echo "  ffmpeg loglevel: ${FFMPEG_LOGLEVEL}"
 echo "  camera glob:     ${CAMERA_GLOB}"
@@ -136,15 +159,17 @@ write_video() {
     fi
   fi
 
-  if [[ -n "${TARGET_FPS}" ]]; then
+  if [[ -n "${TARGET_FPS}" || -n "${TARGET_HEIGHT}" ]]; then
     if ! command -v "${FFMPEG_BIN}" >/dev/null 2>&1; then
-      echo "TARGET_FPS=${TARGET_FPS}, but '${FFMPEG_BIN}' was not found." >&2
-      echo "Install ffmpeg on the preprocessing node/container, or run TARGET_FPS= to disable downsampling." >&2
+      echo "ffmpeg is required when TARGET_FPS or TARGET_HEIGHT/TARGET_WIDTH is set, but '${FFMPEG_BIN}' was not found." >&2
+      echo "Install ffmpeg on the preprocessing node/container, or disable transforms by setting TARGET_FPS= TARGET_HEIGHT= TARGET_WIDTH=." >&2
       exit 2
     fi
 
     local encoder
     local tmp_dst
+    local vf_chain=""
+    local -a vf_filters
     local -a encode_args
     encoder="${RESOLVED_VIDEO_ENCODER:-$(resolve_video_encoder)}"
     tmp_dst="${dst%.mp4}.tmp.$$.mp4"
@@ -155,7 +180,22 @@ write_video() {
       encode_args=(-c:v libx264 -preset veryfast -crf "${VIDEO_CRF}")
     fi
 
-    "${FFMPEG_BIN}" -hide_banner -loglevel "${FFMPEG_LOGLEVEL}" -y -i "${src}"       -vf "fps=${TARGET_FPS}" -an "${encode_args[@]}"       -pix_fmt yuv420p -movflags +faststart "${tmp_dst}"
+    if [[ -n "${TARGET_FPS}" ]]; then
+      vf_filters+=("fps=${TARGET_FPS}")
+    fi
+    if [[ -n "${TARGET_HEIGHT}" ]]; then
+      vf_filters+=("scale='if(gt(a,${TARGET_WIDTH}/${TARGET_HEIGHT}),-2,${TARGET_WIDTH})':'if(gt(a,${TARGET_WIDTH}/${TARGET_HEIGHT}),${TARGET_HEIGHT},-2)'")
+      vf_filters+=("crop=${TARGET_WIDTH}:${TARGET_HEIGHT}")
+    fi
+    if (( ${#vf_filters[@]} > 0 )); then
+      IFS=,
+      vf_chain="${vf_filters[*]}"
+      unset IFS
+    fi
+
+    "${FFMPEG_BIN}" -hide_banner -loglevel "${FFMPEG_LOGLEVEL}" -y -i "${src}" \
+      -vf "${vf_chain}" -an "${encode_args[@]}" \
+      -pix_fmt yuv420p -movflags +faststart "${tmp_dst}"
 
     mv "${tmp_dst}" "${dst}"
     return 0
@@ -385,10 +425,10 @@ PYMP4
 }
 
 RESOLVED_VIDEO_ENCODER="${VIDEO_ENCODER}"
-if [[ -n "${TARGET_FPS}" ]]; then
+if [[ -n "${TARGET_FPS}" || -n "${TARGET_HEIGHT}" ]]; then
   if ! command -v "${FFMPEG_BIN}" >/dev/null 2>&1; then
-    echo "TARGET_FPS=${TARGET_FPS}, but '${FFMPEG_BIN}' was not found." >&2
-    echo "Install ffmpeg on the preprocessing node/container, or run TARGET_FPS= to disable downsampling." >&2
+    echo "ffmpeg is required when TARGET_FPS or TARGET_HEIGHT/TARGET_WIDTH is set, but '${FFMPEG_BIN}' was not found." >&2
+    echo "Install ffmpeg on the preprocessing node/container, or disable transforms by setting TARGET_FPS= TARGET_HEIGHT= TARGET_WIDTH=." >&2
     exit 2
   fi
 
@@ -401,7 +441,7 @@ if (( WORKERS == 1 )); then
     process_meta "$((index + 1))" "${META_PATHS[$index]}"
   done
 else
-  export RAW_ROOT OUT_ROOT MODE CAMERA_GLOB OVERWRITE TARGET_FPS VIDEO_ENCODER RESOLVED_VIDEO_ENCODER FFMPEG_BIN VIDEO_CRF NVENC_CQ NVENC_PRESET FFMPEG_LOGLEVEL
+  export RAW_ROOT OUT_ROOT MODE CAMERA_GLOB OVERWRITE TARGET_FPS TARGET_HEIGHT TARGET_WIDTH VIDEO_ENCODER RESOLVED_VIDEO_ENCODER FFMPEG_BIN VIDEO_CRF NVENC_CQ NVENC_PRESET FFMPEG_LOGLEVEL
   export VIDEOS_DIR METAS_DIR STATUS_DIR total_metas
   export -f extract_instruction nvenc_available resolve_video_encoder write_video process_meta
 
@@ -437,6 +477,7 @@ echo "  raw root:        ${RAW_ROOT}"
 echo "  output root:     ${OUT_ROOT}"
 echo "  mode:            ${MODE}"
 echo "  target fps:      ${TARGET_FPS:-native}"
+echo "  target size:     ${TARGET_HEIGHT:-native}x${TARGET_WIDTH:-native} (HxW)"
 echo "  encoder:         ${RESOLVED_VIDEO_ENCODER}"
 echo "  camera glob:     ${CAMERA_GLOB}"
 echo "  workers:         ${WORKERS}"

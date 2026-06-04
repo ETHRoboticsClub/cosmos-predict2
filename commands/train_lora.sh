@@ -8,9 +8,9 @@ source "${REPO_ROOT}/.env.secrets"
 source "${REPO_ROOT}/.env.paths"
 
 DATASET_PATH="${DATASET_PATH:-/nvme/datasets/teleop/preprocessed}"
-NUM_FRAMES="${NUM_FRAMES:-61}"
-LATENT_FRAMES="${LATENT_FRAMES:-16}"
-BATCH_SIZE="${BATCH_SIZE:-8}"
+NUM_FRAMES="${NUM_FRAMES:-45}"
+LATENT_FRAMES="${LATENT_FRAMES:-12}"
+BATCH_SIZE="${BATCH_SIZE:-4}"
 VIDEO_HEIGHT="${VIDEO_HEIGHT:-480}"
 VIDEO_WIDTH="${VIDEO_WIDTH:-640}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-/nvme/checkpoints}"
@@ -20,8 +20,9 @@ HELDOUT_VIDEO_INDEX="${HELDOUT_VIDEO_INDEX:-0}"
 HELDOUT_START_INDICES="${HELDOUT_START_INDICES:-[0,16,32]}"
 ENABLE_WANDB_VIDEO_SAMPLING="${ENABLE_WANDB_VIDEO_SAMPLING:-1}"
 DRAW_SAMPLE_EVERY="${DRAW_SAMPLE_EVERY:-100}"
-DISABLE_TORCH_COMPILE="${DISABLE_TORCH_COMPILE:-1}"
+DISABLE_TORCH_COMPILE="${DISABLE_TORCH_COMPILE:-0}"
 MAX_ITER="${MAX_ITER:-10000}"
+SLOW_LOAD_WARN_S="${SLOW_LOAD_WARN_S:-2.0}"
 
 # Disabled branch
 DRAW_SAMPLE_ARGS=(
@@ -55,6 +56,7 @@ fi
 export COSMOS_PREDICT2_ARGS="${COSMOS_PREDICT2_ARGS:---checkpoints ${CHECKPOINT_DIR}}"
 export WANDB_ENTITY="${WANDB_ENTITY:-eth-robotics-club}"
 export WANDB_PROJECT="${WANDB_PROJECT:-cosmos2-video}"
+export COSMOS_SLOW_LOAD_WARN_S="${COSMOS_SLOW_LOAD_WARN_S:-${SLOW_LOAD_WARN_S}}"
 if [[ "${DISABLE_TORCH_COMPILE}" == "1" ]]; then
   export TORCH_COMPILE_DISABLE=1
   export TORCHDYNAMO_DISABLE=1
@@ -67,37 +69,41 @@ cd "${REPO_ROOT}"
 # currently doing either 1 or 5 frames conditioning
 torchrun --nproc_per_node=8 --master_port=12341 -m scripts.train \
   --config=cosmos_predict2/configs/base/config.py -- \
+  experiment=predict2_video2world_lora_training_2b_cosmos_nemo_assets \
+  job.name=lora_200M \
+  model=predict2_video2world_fsdp_2b_480p_10fps \
+  model_parallel.context_parallel_size=1 \
+  model.config.train_architecture=lora \
+  model.config.lora_rank=140 \
+  model.config.lora_alpha=140 \
+  model.config.pipe_config.ema.enabled=False \
+  model.config.pipe_config.ema.enabled=False \
+  model.config.pipe_config.state_t="${LATENT_FRAMES}" \
   model.config.pipe_config.net.sac_config.mode=block_wise \
   model.config.pipe_config.net.sac_config.every_n_blocks=1 \
-  experiment=predict2_video2world_lora_training_2b_cosmos_nemo_assets \
-  model=predict2_video2world_fsdp_2b_480p_10fps \
-  model.config.pipe_config.ema.enabled=False \
   dataloader_train.dataset.dataset_dir="${DATASET_PATH}" \
   dataloader_train.sampler.dataset.dataset_dir="${DATASET_PATH}" \
   dataloader_train.dataset.exclude_video_indices="[${HELDOUT_VIDEO_INDEX}]" \
   dataloader_train.sampler.dataset.exclude_video_indices="[${HELDOUT_VIDEO_INDEX}]" \
-  dataloader_val.dataset.dataset_dir="${DATASET_PATH}" \
-  dataloader_val.sampler.dataset.dataset_dir="${DATASET_PATH}" \
   dataloader_train.dataset.num_frames="${NUM_FRAMES}" \
   dataloader_train.sampler.dataset.num_frames="${NUM_FRAMES}" \
-  dataloader_val.dataset.num_frames="${NUM_FRAMES}" \
-  dataloader_val.sampler.dataset.num_frames="${NUM_FRAMES}" \
-  model.config.pipe_config.state_t="${LATENT_FRAMES}" \
-  dataloader_train.batch_size="${BATCH_SIZE}" \
-  dataloader_val.batch_size=1 \
   dataloader_train.dataset.video_size="[${VIDEO_HEIGHT},${VIDEO_WIDTH}]" \
   dataloader_train.sampler.dataset.video_size="[${VIDEO_HEIGHT},${VIDEO_WIDTH}]" \
+  dataloader_train.batch_size="${BATCH_SIZE}" \
+  dataloader_train.num_workers="${TRAIN_WORKERS}" \
+  dataloader_val.dataset.dataset_dir="${DATASET_PATH}" \
+  dataloader_val.sampler.dataset.dataset_dir="${DATASET_PATH}" \
+  dataloader_val.dataset.num_frames="${NUM_FRAMES}" \
+  dataloader_val.sampler.dataset.num_frames="${NUM_FRAMES}" \
   dataloader_val.dataset.video_size="[${VIDEO_HEIGHT},${VIDEO_WIDTH}]" \
   dataloader_val.sampler.dataset.video_size="[${VIDEO_HEIGHT},${VIDEO_WIDTH}]" \
-  model.config.train_architecture=lora \
-  model.config.pipe_config.ema.enabled=False \
-  model_parallel.context_parallel_size=1 \
-  dataloader_train.num_workers="${TRAIN_WORKERS}" \
+  dataloader_val.batch_size=1 \
   trainer.run_validation=False \
   "${DRAW_SAMPLE_ARGS[@]}" \
   trainer.max_iter="${MAX_ITER}" \
-  scheduler.cycle_lengths="[${MAX_ITER}]" \
-  trainer.logging_iter=10
+  trainer.logging_iter=5 \
+  optimizer.lr=0.0001726336 \
+  scheduler.cycle_lengths="[${MAX_ITER}]"
   # dataloader_val.num_workers="${VAL_WORKERS}" \
 
 # Params copied from cosmos-predict2.5/commands/train.sh. Uncomment and adapt as needed.
