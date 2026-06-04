@@ -835,13 +835,14 @@ class Video2WorldPipeline(BasePipeline):
             x = split_inputs_cp(x=x, seq_dim=2, cp_group=self.get_context_parallel_group())
 
         self.scheduler.set_timesteps(num_steps, device=x.device)
-        x = x.to(dtype=torch.float32)
+        x = x.to(dtype=self.tensor_kwargs["dtype"])
         x0_prev: torch.Tensor | None = None
 
         for i, _ in enumerate(self.scheduler.timesteps):
             sigma_t = self.scheduler.sigmas[i].to(x.device, dtype=torch.float32)
             x0_pred = x0_fn(x, sigma_t.repeat(x.shape[0]))
             x, x0_prev = self.scheduler.step(x0_pred=x0_pred, i=i, sample=x, x0_prev=x0_prev)
+            x = x.to(dtype=self.tensor_kwargs["dtype"])
 
         # Final clean pass at sigma_min.
         sigma_min = self.scheduler.sigmas[-1].to(x.device, dtype=torch.float32)

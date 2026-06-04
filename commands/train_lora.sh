@@ -14,8 +14,12 @@ BATCH_SIZE="${BATCH_SIZE:-3}"
 VIDEO_HEIGHT="${VIDEO_HEIGHT:-480}"
 VIDEO_WIDTH="${VIDEO_WIDTH:-640}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-/nvme/checkpoints}"
+
 TRAIN_WORKERS="${TRAIN_WORKERS:-32}"
 VAL_WORKERS="${VAL_WORKERS:-8}"
+HELDOUT_VIDEO_INDEX="${HELDOUT_VIDEO_INDEX:-0}"
+HELDOUT_START_INDICES="${HELDOUT_START_INDICES:-[0,16,32]}"
+
 
 export COSMOS_PREDICT2_ARGS="${COSMOS_PREDICT2_ARGS:---checkpoints ${CHECKPOINT_DIR}}"
 export WANDB_ENTITY="${WANDB_ENTITY:-eth-robotics-club}"
@@ -35,6 +39,8 @@ torchrun --nproc_per_node=8 --master_port=12341 -m scripts.train \
   model.config.pipe_config.ema.enabled=False \
   dataloader_train.dataset.dataset_dir="${DATASET_PATH}" \
   dataloader_train.sampler.dataset.dataset_dir="${DATASET_PATH}" \
+  dataloader_train.dataset.exclude_video_indices="[${HELDOUT_VIDEO_INDEX}]" \
+  dataloader_train.sampler.dataset.exclude_video_indices="[${HELDOUT_VIDEO_INDEX}]" \
   dataloader_val.dataset.dataset_dir="${DATASET_PATH}" \
   dataloader_val.sampler.dataset.dataset_dir="${DATASET_PATH}" \
   dataloader_train.dataset.num_frames="${NUM_FRAMES}" \
@@ -54,8 +60,18 @@ torchrun --nproc_per_node=8 --master_port=12341 -m scripts.train \
   dataloader_train.num_workers="${TRAIN_WORKERS}" \
   trainer.run_validation=False \
   trainer.callbacks.draw_sample.is_ema=False \
+  trainer.callbacks.draw_sample.is_x0=False \
+  trainer.callbacks.draw_sample.is_sample=True \
+  trainer.callbacks.draw_sample.show_all_frames=True \
+  trainer.callbacks.draw_sample.n_viz_sample=3 \
+  trainer.callbacks.draw_sample.fixed_sample_video_index="${HELDOUT_VIDEO_INDEX}" \
+  trainer.callbacks.draw_sample.fixed_sample_start_indices="${HELDOUT_START_INDICES}" \
+  trainer.callbacks.draw_sample.fixed_sample_dataset_dir="${DATASET_PATH}" \
+  trainer.callbacks.draw_sample.fixed_sample_num_frames="${NUM_FRAMES}" \
+  trainer.callbacks.draw_sample.fixed_sample_video_size="[${VIDEO_HEIGHT},${VIDEO_WIDTH}]" \
   trainer.callbacks.draw_sample.run_at_start=True \
-  trainer.logging_iter=10
+  trainer.logging_iter=10 \
+  scheduler.cycle_lengths="[10000]"
   # dataloader_val.num_workers="${VAL_WORKERS}" \
 
 # Params copied from cosmos-predict2.5/commands/train.sh. Uncomment and adapt as needed.

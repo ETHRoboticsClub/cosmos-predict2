@@ -41,6 +41,7 @@ class Dataset(Dataset):
         dataset_dir,
         num_frames,
         video_size,
+        exclude_video_indices=None,
     ) -> None:
         """Dataset class for loading image-text-to-video generation data.
 
@@ -61,15 +62,20 @@ class Dataset(Dataset):
         video_dir = os.path.join(self.dataset_dir, "videos")
         self.t5_dir = os.path.join(self.dataset_dir, "t5_xxl")
 
-        self.video_paths = [os.path.join(video_dir, f) for f in os.listdir(video_dir) if f.endswith(".mp4")]
-        self.video_paths = sorted(self.video_paths)
+        self.all_video_paths = [os.path.join(video_dir, f) for f in os.listdir(video_dir) if f.endswith(".mp4")]
+        self.all_video_paths = sorted(self.all_video_paths)
         # remove video paths that does not have t5_embedding
-        self.video_paths = [
+        self.all_video_paths = [
             path
-            for path in self.video_paths
+            for path in self.all_video_paths
             if os.path.exists(os.path.join(self.t5_dir, os.path.basename(path).replace(".mp4", ".pickle")))
         ]
-        log.info(f"{len(self.video_paths)} videos in total")
+        excluded_indices = self._normalize_video_indices(exclude_video_indices, len(self.all_video_paths))
+        self.video_paths = [path for idx, path in enumerate(self.all_video_paths) if idx not in excluded_indices]
+        log.info(
+            f"{len(self.video_paths)} videos in total "
+            f"({len(excluded_indices)} excluded from {len(self.all_video_paths)} available)"
+        )
 
         self.wrong_number = 0
         self._t5_embedding_cache = {}
@@ -81,7 +87,23 @@ class Dataset(Dataset):
     def __len__(self) -> int:
         return len(self.video_paths)
 
-    def _load_video(self, video_path) -> tuple[np.ndarray, float]:
+    @staticmethod
+    def _normalize_video_indices(indices, total: int) -> set[int]:
+        if indices is None:
+            return set()
+        if isinstance(indices, int):
+            indices = [indices]
+        normalized = set()
+        for index in indices:
+            index = int(index)
+            if index < 0:
+                index += total
+            if index < 0 or index >= total:
+                raise IndexError(f"Video index {index} is out of range for {total} videos")
+            normalized.add(index)
+        return normalized
+
+    def _load_video(self, video_path, start_frame: int | None = None) -> tuple[np.ndarray, float]:
         vr = VideoReader(video_path, ctx=cpu(0), num_threads=2)
         total_frames = len(vr)
         if total_frames < self.sequence_length:
@@ -92,9 +114,17 @@ class Dataset(Dataset):
             )
             raise ValueError(f"Video {video_path} has insufficient frames.")
 
-        # randomly sample a sequence of frames
         max_start_idx = total_frames - self.sequence_length
-        start_frame = np.random.randint(0, max_start_idx)
+        if start_frame is None:
+            # randomly sample a sequence of frames
+            start_frame = np.random.randint(0, max_start_idx + 1)
+        else:
+            start_frame = int(start_frame)
+            if start_frame < 0 or start_frame > max_start_idx:
+                raise ValueError(
+                    f"Requested start_frame={start_frame} for {video_path}, "
+                    f"but valid range is [0, {max_start_idx}]"
+                )
         end_frame = start_frame + self.sequence_length
         frame_ids = np.arange(start_frame, end_frame).tolist()
 
@@ -108,49 +138,61 @@ class Dataset(Dataset):
         del vr  # delete the reader to avoid memory leak
         return frame_data, fps
 
-    def _get_frames(self, video_path: str) -> tuple[torch.Tensor, float]:
-        frames, fps = self._load_video(video_path)
+    def _get_frames(self, video_path: str, start_frame: int | None = None) -> tuple[torch.Tensor, float]:
+        frames, fps = self._load_video(video_path, start_frame=start_frame)
         frames = frames.astype(np.uint8)
         frames = torch.from_numpy(frames).permute(0, 3, 1, 2)  # [T, C, H, W]
         frames = self.preprocess(frames)
         frames = torch.clamp(frames * 255.0, 0, 255).to(torch.uint8)
         return frames, fps
 
+    def _build_item(self, video_path: str, start_frame: int | None, source_index: int) -> dict | Any:
+        data = dict()
+        _t0 = time.perf_counter()
+        video, fps = self._get_frames(video_path, start_frame=start_frame)
+        _load_s = time.perf_counter() - _t0
+        if _load_s > 0.5:
+            log.warning(f"Slow data load: {video_path} took {_load_s:.2f}s")
+        video = video.permute(1, 0, 2, 3)  # Rearrange from [T, C, H, W] to [C, T, H, W]
+        t5_embedding_path = os.path.join(
+            self.t5_dir,
+            os.path.basename(video_path).replace(".mp4", ".pickle"),
+        )
+        data["video"] = video
+        data["video_name"] = {
+            "video_path": video_path,
+            "t5_embedding_path": t5_embedding_path,
+            "video_index": source_index,
+            "start_frame": -1 if start_frame is None else start_frame,
+        }
+
+        _, _, h, w = video.shape
+
+        cache_key = get_embedding_cache_key(t5_embedding_path)
+        t5_embedding, t5_text_mask = load_t5_embedding_cached(
+            self._t5_embedding_cache, cache_key, t5_embedding_path
+        )
+
+        data["t5_text_embeddings"] = t5_embedding
+        data["t5_text_mask"] = t5_text_mask
+        data["fps"] = fps
+        data["image_size"] = torch.tensor([h, w, h, w])
+        data["num_frames"] = self.sequence_length
+        data["padding_mask"] = torch.zeros(1, h, w)
+
+        return data
+
+    def get_fixed_sample(self, video_index: int, start_frame: int, from_all_videos: bool = True) -> dict | Any:
+        paths = self.all_video_paths if from_all_videos else self.video_paths
+        if video_index < 0:
+            video_index += len(paths)
+        if video_index < 0 or video_index >= len(paths):
+            raise IndexError(f"Video index {video_index} is out of range for {len(paths)} videos")
+        return self._build_item(paths[video_index], start_frame=start_frame, source_index=video_index)
+
     def __getitem__(self, index) -> dict | Any:
         try:
-            data = dict()
-            _t0 = time.perf_counter()
-            video, fps = self._get_frames(self.video_paths[index])
-            _load_s = time.perf_counter() - _t0
-            if _load_s > 0.5:
-                log.warning(f"Slow data load: {self.video_paths[index]} took {_load_s:.2f}s")
-            video = video.permute(1, 0, 2, 3)  # Rearrange from [T, C, H, W] to [C, T, H, W]
-            video_path = self.video_paths[index]
-            t5_embedding_path = os.path.join(
-                self.t5_dir,
-                os.path.basename(video_path).replace(".mp4", ".pickle"),
-            )
-            data["video"] = video
-            data["video_name"] = {
-                "video_path": video_path,
-                "t5_embedding_path": t5_embedding_path,
-            }
-
-            _, _, h, w = video.shape
-
-            cache_key = get_embedding_cache_key(t5_embedding_path)
-            t5_embedding, t5_text_mask = load_t5_embedding_cached(
-                self._t5_embedding_cache, cache_key, t5_embedding_path
-            )
-
-            data["t5_text_embeddings"] = t5_embedding
-            data["t5_text_mask"] = t5_text_mask
-            data["fps"] = fps
-            data["image_size"] = torch.tensor([h, w, h, w])
-            data["num_frames"] = self.sequence_length
-            data["padding_mask"] = torch.zeros(1, h, w)
-
-            return data
+            return self._build_item(self.video_paths[index], start_frame=None, source_index=index)
         except Exception:
             warnings.warn(  # noqa: B028
                 f"Invalid data encountered: {self.video_paths[index]}. Skipped "
@@ -160,7 +202,7 @@ class Dataset(Dataset):
             warnings.warn(traceback.format_exc())  # noqa: B028
             self.wrong_number += 1
             log.info(self.wrong_number, rank0_only=False)
-            return self[np.random.randint(len(self.samples))]
+            return self[np.random.randint(len(self.video_paths))]
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ import torchvision.transforms.functional as torchvision_F
 import wandb
 from einops import rearrange, repeat
 from megatron.core import parallel_state
+from torch.utils.data._utils.collate import default_collate
 
 from cosmos_predict2.utils.context_parallel import cat_outputs_cp
 from imaginaire.callbacks.every_n import EveryN
@@ -82,6 +83,12 @@ class EveryNDrawSample(EveryN):
         show_all_frames: bool = False,
         fps: int = 16,
         run_at_start: bool = False,
+        fixed_sample_video_index: int | None = None,
+        fixed_sample_start_indices: list[int] | None = None,
+        fixed_sample_dataset_dir: str | None = None,
+        fixed_sample_num_frames: int | None = None,
+        fixed_sample_video_size: list[int] | tuple[int, int] | None = None,
+        fixed_sample_from_all_videos: bool = True,
     ):
         super().__init__(every_n, step_size, run_at_start=run_at_start)
         self.fix_batch = fix_batch_fp
@@ -99,7 +106,75 @@ class EveryNDrawSample(EveryN):
         self.num_sampling_step = num_sampling_step
         self.rank = distributed.get_rank()
         self.fps = fps
+        self.fixed_sample_video_index = fixed_sample_video_index
+        self.fixed_sample_start_indices = fixed_sample_start_indices
+        self.fixed_sample_dataset_dir = fixed_sample_dataset_dir
+        self.fixed_sample_num_frames = fixed_sample_num_frames
+        self.fixed_sample_video_size = fixed_sample_video_size
+        self.fixed_sample_from_all_videos = fixed_sample_from_all_videos
+        self._fixed_sample_batch = None
         self._first_val_batch = None
+
+    def _config_value(self, path: str, default=None):
+        current = self.config
+        for part in path.split("."):
+            if current is None:
+                return default
+            if isinstance(current, dict):
+                if part not in current:
+                    return default
+                current = current[part]
+            else:
+                if not hasattr(current, part):
+                    return default
+                current = getattr(current, part)
+        return current
+
+    def _config_first(self, paths: list[str], default=None):
+        for path in paths:
+            value = self._config_value(path, None)
+            if value is not None:
+                return value
+        return default
+
+    def _build_fixed_sample_batch(self):
+        if self.fixed_sample_video_index is None or not self.fixed_sample_start_indices:
+            return None
+
+        from cosmos_predict2.data.dataset_video import Dataset
+
+        dataset_dir = self.fixed_sample_dataset_dir or self._config_first(
+            ["dataloader_val.dataset.dataset_dir", "dataloader_train.dataset.dataset_dir"]
+        )
+        num_frames = self.fixed_sample_num_frames or self._config_first(
+            ["dataloader_val.dataset.num_frames", "dataloader_train.dataset.num_frames"]
+        )
+        video_size = self.fixed_sample_video_size or self._config_first(
+            ["dataloader_val.dataset.video_size", "dataloader_train.dataset.video_size"]
+        )
+        if dataset_dir is None or num_frames is None or video_size is None:
+            raise ValueError(
+                "fixed_sample_video_index requires dataset_dir, num_frames, and video_size. "
+                "Set fixed_sample_dataset_dir/fixed_sample_num_frames/fixed_sample_video_size or configure dataloader_val."
+            )
+
+        start_indices = [int(start) for start in self.fixed_sample_start_indices]
+        dataset = Dataset(dataset_dir=dataset_dir, num_frames=int(num_frames), video_size=tuple(video_size))
+        samples = [
+            dataset.get_fixed_sample(
+                video_index=int(self.fixed_sample_video_index),
+                start_frame=start,
+                from_all_videos=bool(self.fixed_sample_from_all_videos),
+            )
+            for start in start_indices
+        ]
+        self.n_viz_sample = max(self.n_viz_sample, len(samples))
+        if distributed.get_rank() == 0:
+            log.info(
+                f"Fixed W&B sample: video_index={self.fixed_sample_video_index}, "
+                f"start_indices={start_indices}, dataset_dir={dataset_dir}"
+            )
+        return default_collate(samples)
 
     def on_train_start(self, model: ImaginaireModel, iteration: int = 0) -> None:
         config_job = self.config.job
@@ -116,6 +191,8 @@ class EveryNDrawSample(EveryN):
             self.data_parallel_id = parallel_state.get_data_parallel_rank()
         else:
             self.data_parallel_id = self.rank
+
+        self._fixed_sample_batch = self._build_fixed_sample_batch()
 
         # if self.use_negative_prompt:
         #     self.negative_prompt_data = easy_io.load(get_itemdataset_option("negative_prompt_v0_s3").path)
@@ -237,6 +314,7 @@ class EveryNDrawSample(EveryN):
                 )
 
         log.debug("entering, every_n_impl", rank0_only=False)
+        sample_img_fp = None
         with context():
             log.debug("entering, ema", rank0_only=False)
             # we only use rank0 and rank to generate images and save
@@ -262,6 +340,17 @@ class EveryNDrawSample(EveryN):
                         },
                         f"s3://rundir/{self.name}/{tag}_MSE_Iter{iteration:09d}.json",
                     )
+            if self.is_sample:
+                log.debug("entering, sample", rank0_only=False)
+                sample_img_fp = self.sample(
+                    trainer,
+                    model,
+                    data_batch,
+                    output_batch,
+                    loss,
+                    iteration,
+                )
+                log.debug("done, sample", rank0_only=False)
             if self.fix_batch is not None:
                 misc.to(self.fix_batch, "cpu")
 
@@ -280,6 +369,8 @@ class EveryNDrawSample(EveryN):
                 # convert mse_loss to a dict
                 mse_loss = mse_loss.tolist()
                 info.update({f"x0_pred_mse_{tag}/Sigma{sigmas[i]:0.5f}": mse_loss[i] for i in range(len(mse_loss))})
+            if self.is_sample and sample_img_fp is not None:
+                info[f"{self.name}/{tag}_sample"] = self._to_wandb_media(sample_img_fp, caption=str(sample_counter))
 
             wandb.log(
                 info,
@@ -293,7 +384,11 @@ class EveryNDrawSample(EveryN):
         Args:
             skip_save: to make sure FSDP can work, we run forward pass on all ranks even though we only save on rank 0 and 1
         """
-        if self.fix_batch is not None:
+        using_fixed_sample = self._fixed_sample_batch is not None
+        if using_fixed_sample:
+            # Keep raw video as uint8; the pipeline normalizes/casts it in get_data_and_condition().
+            data_batch = misc.to(self._fixed_sample_batch, device=model.tensor_kwargs["device"])
+        elif self.fix_batch is not None:
             data_batch = misc.to(self.fix_batch, **model.tensor_kwargs)
 
         tag = "ema" if self.is_ema else "reg"
@@ -316,20 +411,22 @@ class EveryNDrawSample(EveryN):
         # Use only the first guidance value to avoid 4x cost (default list has 4 values).
         # self.guidance may be a Hydra ListConfig (not a plain list), so index then cast.
         guidance = float(self.guidance[0]) if hasattr(self.guidance, "__getitem__") else float(self.guidance)
+        n_sample = min(self.n_viz_sample, x0.shape[0]) if using_fixed_sample else 1
         # generate_samples_from_batch handles CP split/gather and decode internally.
-        sample = model.pipe.generate_samples_from_batch(
-            data_batch,
-            guidance=guidance,
-            state_shape=x0.shape[1:],
-            n_sample=1,  # only one sample needed for visualization
-            num_steps=self.num_sampling_step,
-        )
-        to_show = [sample.float().cpu(), raw_data[:1].float().cpu()]
+        with torch.autocast(device_type="cuda", dtype=model.precision):
+            sample = model.pipe.generate_samples_from_batch(
+                data_batch,
+                guidance=guidance,
+                state_shape=x0.shape[1:],
+                n_sample=n_sample,
+                num_steps=self.num_sampling_step,
+            )
+        to_show = [sample.float().cpu(), raw_data[:n_sample].float().cpu()]
 
         base_fp_wo_ext = f"{tag}_ReplicateID{self.data_parallel_id:04d}_Sample_Iter{iteration:09d}"
 
         if is_tp_cp_pp_rank0():
-            local_path = self.run_save(to_show, batch_size=1, base_fp_wo_ext=base_fp_wo_ext)
+            local_path = self.run_save(to_show, batch_size=n_sample, base_fp_wo_ext=base_fp_wo_ext)
             return local_path
         return None
 
