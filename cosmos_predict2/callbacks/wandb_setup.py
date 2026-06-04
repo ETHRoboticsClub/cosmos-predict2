@@ -22,6 +22,7 @@ class WandbSetup(Callback):
             return
         wandb.init(
             project=os.environ.get("WANDB_PROJECT", self.config.job.project),
+            entity=os.environ.get("WANDB_ENTITY"),
             group=os.environ.get("WANDB_RUN_GROUP", self.config.job.group),
             name=os.environ.get("WANDB_RUN_ID", self.config.job.name),
             resume="allow",

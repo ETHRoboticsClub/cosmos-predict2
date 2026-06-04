@@ -73,7 +73,7 @@ class Dataset(Dataset):
 
         self.wrong_number = 0
         self._t5_embedding_cache = {}
-        self.preprocess = T.Compose([ToTensorVideo(), Resize_Preprocess(tuple(video_size))])
+        self.preprocess = T.Compose([ToTensorVideo(), Resize_Preprocess(tuple(video_size), mode="center_crop")])
 
     def __str__(self) -> str:
         return f"{len(self.video_paths)} samples from {self.dataset_dir}"

@@ -14,18 +14,34 @@
 # limitations under the License.
 
 
+import math
+
 import torch
 import torchvision.transforms.functional as F
 
 
 class Resize_Preprocess:
-    def __init__(self, size: tuple[int, int]):
+    def __init__(self, size: tuple[int, int], mode: str = "resize"):
         """
         Initialize the preprocessing class with the target size.
         Args:
         size (tuple): The target height and width as a tuple (height, width).
         """
         self.size = size
+        self.mode = mode
+
+    def _resize(self, frame):
+        if self.mode == "resize":
+            return F.resize(frame, self.size, antialias=True)
+        if self.mode != "center_crop":
+            raise ValueError(f"Unknown resize mode: {self.mode}")
+
+        target_h, target_w = self.size
+        _, input_h, input_w = frame.shape
+        scale = max(target_h / input_h, target_w / input_w)
+        resize_size = [math.ceil(input_h * scale), math.ceil(input_w * scale)]
+        frame = F.resize(frame, resize_size, antialias=True)
+        return F.center_crop(frame, self.size)
 
     def __call__(self, video_frames):
         """
@@ -37,10 +53,10 @@ class Resize_Preprocess:
         """
         if video_frames.ndim == 4:
             # Resize each frame in the video
-            resized_frames = torch.stack([F.resize(frame, self.size, antialias=True) for frame in video_frames])
+            resized_frames = torch.stack([self._resize(frame) for frame in video_frames])
         else:
             # Resize a single image
-            resized_frames = F.resize(video_frames, self.size, antialias=True)
+            resized_frames = self._resize(video_frames)
 
         return resized_frames
 

@@ -48,6 +48,7 @@ class EveryN(Callback):
         self.step_size = step_size
         self.barrier_after_run = barrier_after_run
         self.run_at_start = run_at_start
+        self._has_run_at_start = False
 
     def on_training_step_end(
         self,
@@ -61,10 +62,11 @@ class EveryN(Callback):
         if self.every_n != 0:
             trainer = self.trainer
             global_step = iteration // self.step_size
-            should_run = (iteration == 1 and self.run_at_start) or (
-                global_step % self.every_n == 0
-            )  # (self.every_n - 1)
+            should_run_at_start = self.run_at_start and not self._has_run_at_start
+            should_run = should_run_at_start or (global_step % self.every_n == 0)  # (self.every_n - 1)
             if should_run:
+                if should_run_at_start:
+                    self._has_run_at_start = True
                 log.debug(f"Callback {self.__class__.__name__} fired on train_batch_end step {global_step}")
                 self.every_n_impl(trainer, model, data_batch, output_batch, loss, iteration)
                 log.debug(f"Callback {self.__class__.__name__} finished on train_batch_end step {global_step}")

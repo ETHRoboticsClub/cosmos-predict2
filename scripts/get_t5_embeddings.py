@@ -18,9 +18,6 @@ import os
 import pickle
 import shutil
 
-import numpy as np
-
-from imaginaire.auxiliary.text_encoder import CosmosT5TextEncoder, CosmosT5TextEncoderConfig
 from imaginaire.constants import T5_MODEL_DIR
 
 """example command
@@ -42,12 +39,24 @@ def parse_args() -> argparse.ArgumentParser:
 
 def main(args) -> None:
     metas_dir = os.path.join(args.dataset_path, "metas")
+    if not os.path.isdir(metas_dir):
+        raise FileNotFoundError(f"Missing metadata directory: {metas_dir}")
+
     metas_list = [
         os.path.join(metas_dir, filename) for filename in sorted(os.listdir(metas_dir)) if filename.endswith(".txt")
     ]
+    if not metas_list:
+        raise RuntimeError(
+            f"No prompt metadata found in {metas_dir}. "
+            "Run ./commands/preprocess.sh first, or pass --dataset_path to a preprocessed dataset with metas/*.txt files."
+        )
 
     t5_xxl_dir = os.path.join(args.dataset_path, "t5_xxl")
     os.makedirs(t5_xxl_dir, exist_ok=True)
+
+    import numpy as np
+
+    from imaginaire.auxiliary.text_encoder import CosmosT5TextEncoder, CosmosT5TextEncoderConfig
 
     # Initialize T5
     encoder_config = CosmosT5TextEncoderConfig(ckpt_path=args.cache_dir)

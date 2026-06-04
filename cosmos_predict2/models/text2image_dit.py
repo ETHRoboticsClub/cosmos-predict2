@@ -1512,18 +1512,19 @@ class MiniTrainDIT(WeightTrainingStat):
             for block_id, block in self.blocks.named_children():
                 if int(block_id) % sac_config.every_n_blocks == 0:
                     log.debug(f"Enable selective checkpoint for block {block_id}")
-                    block = ptd_checkpoint_wrapper(
-                        block,
-                        context_fn=_context_fn,
-                        preserve_rng_state=False,
-                    )
+                    checkpoint_kwargs = {"preserve_rng_state": False}
+                    if _context_fn is not None:
+                        checkpoint_kwargs["context_fn"] = _context_fn
+                    block = ptd_checkpoint_wrapper(block, **checkpoint_kwargs)
                     self.blocks.register_module(block_id, block)
+            checkpoint_kwargs = {"preserve_rng_state": False}
+            if _context_fn is not None:
+                checkpoint_kwargs["context_fn"] = _context_fn
             self.register_module(
                 "final_layer",
                 ptd_checkpoint_wrapper(
                     self.final_layer,
-                    context_fn=_context_fn,
-                    preserve_rng_state=False,
+                    **checkpoint_kwargs,
                 ),
             )
 

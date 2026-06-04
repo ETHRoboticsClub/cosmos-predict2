@@ -133,6 +133,7 @@ class Predict2Video2WorldModel(ImaginaireModel):
         self.pipe = Video2WorldPipeline.from_config(
             config.pipe_config,
             dit_path=config.model_manager_config.dit_path,
+            use_text_encoder=False,
         )
 
         self.freeze_parameters()

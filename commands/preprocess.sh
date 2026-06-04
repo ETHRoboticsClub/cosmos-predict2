@@ -6,18 +6,19 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 source "${REPO_ROOT}/.env.paths"
 
-RAW_ROOT="${RAW_ROOT:-${NVME}/datasets/teleop/raw}"
-OUT_ROOT="${OUT_ROOT:-${NVME}/datasets/teleop/preprocessed}"
+RAW_ROOT="${RAW_ROOT:-/nvme/datasets/teleop/raw}"
+OUT_ROOT="${OUT_ROOT:-/nvme/datasets/teleop/preprocessed}"
 MODE="${MODE:-symlink}"
 CAMERA_GLOB="${CAMERA_GLOB:-camera_top-images-rgb.mp4}"
 OVERWRITE="${OVERWRITE:-1}"
-TARGET_FPS="${TARGET_FPS:-16}"
+TARGET_FPS="${TARGET_FPS-16}"
 VIDEO_ENCODER="${VIDEO_ENCODER:-auto}"
 FFMPEG_BIN="${FFMPEG_BIN:-ffmpeg}"
 VIDEO_CRF="${VIDEO_CRF:-18}"
 NVENC_CQ="${NVENC_CQ:-23}"
 NVENC_PRESET="${NVENC_PRESET:-p4}"
 FFMPEG_LOGLEVEL="${FFMPEG_LOGLEVEL:-error}"
+WORKERS="${WORKERS:-1}"
 
 VIDEOS_DIR="${OUT_ROOT}/videos"
 METAS_DIR="${OUT_ROOT}/metas"
@@ -34,6 +35,11 @@ fi
 
 if [[ "${VIDEO_ENCODER}" != "auto" && "${VIDEO_ENCODER}" != "h264_nvenc" && "${VIDEO_ENCODER}" != "libx264" ]]; then
   echo "VIDEO_ENCODER must be auto, h264_nvenc, or libx264." >&2
+  exit 2
+fi
+
+if [[ ! "${WORKERS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "WORKERS must be a positive integer." >&2
   exit 2
 fi
 
@@ -60,15 +66,18 @@ echo "  mode:            ${MODE}"
 echo "  target fps:      ${TARGET_FPS:-native}"
 echo "  ffmpeg loglevel: ${FFMPEG_LOGLEVEL}"
 echo "  camera glob:     ${CAMERA_GLOB}"
+echo "  workers:         ${WORKERS}"
 echo "Scanning for session_meta.json files..."
-total_metas="$(find "${RAW_ROOT}" -mindepth 3 -maxdepth 3 -type f -name session_meta.json -print | wc -l)"
+mapfile -d '' META_PATHS < <(find "${RAW_ROOT}" -mindepth 3 -maxdepth 3 -type f -name session_meta.json -print0 | sort -z)
+total_metas="${#META_PATHS[@]}"
 echo "Found ${total_metas} metadata files."
 
-processed_metas=0
 created=0
 skipped=0
 missing_videos=0
 missing_instruction=0
+STATUS_DIR="$(mktemp -d "${OUT_ROOT}/.preprocess-status.XXXXXX")"
+trap 'rm -rf "${STATUS_DIR}"' EXIT
 
 extract_instruction() {
   local meta_path="$1"
@@ -124,6 +133,7 @@ write_video() {
 
     local encoder
     local tmp_dst
+    local -a encode_args
     encoder="$(resolve_video_encoder)"
     tmp_dst="${dst%.mp4}.tmp.$$.mp4"
 
@@ -144,6 +154,74 @@ write_video() {
   else
     ln -s "${src}" "${dst}"
   fi
+}
+
+process_meta() {
+  local index="$1"
+  local meta_path="$2"
+  local episode_dir
+  local episode_name
+  local date_name
+  local instruction
+  local video_path
+  local video_file
+  local camera_name
+  local sample_name
+  local out_video
+  local out_meta
+  local -a videos
+  local created_count=0
+  local skipped_count=0
+  local missing_videos_count=0
+  local missing_instruction_count=0
+
+  episode_dir="$(dirname "${meta_path}")"
+  episode_name="$(basename "${episode_dir}")"
+  date_name="$(basename "$(dirname "${episode_dir}")")"
+
+  if ! instruction="$(extract_instruction "${meta_path}")"; then
+    echo "Skipping ${episode_dir}: failed to parse session_meta.json" >&2
+    missing_instruction_count=1
+    printf "%s %s %s %s\n" "${created_count}" "${skipped_count}" "${missing_videos_count}" "${missing_instruction_count}" > "${STATUS_DIR}/${index}.status"
+    return 0
+  fi
+
+  if [[ -z "${instruction}" ]]; then
+    echo "Skipping ${episode_dir}: no instruction in session_meta.json" >&2
+    missing_instruction_count=1
+    printf "%s %s %s %s\n" "${created_count}" "${skipped_count}" "${missing_videos_count}" "${missing_instruction_count}" > "${STATUS_DIR}/${index}.status"
+    return 0
+  fi
+
+  shopt -s nullglob
+  videos=("${episode_dir}"/${CAMERA_GLOB})
+  shopt -u nullglob
+
+  if (( ${#videos[@]} == 0 )); then
+    echo "Skipping ${episode_dir}: no videos matching ${CAMERA_GLOB}" >&2
+    missing_videos_count=1
+    printf "%s %s %s %s\n" "${created_count}" "${skipped_count}" "${missing_videos_count}" "${missing_instruction_count}" > "${STATUS_DIR}/${index}.status"
+    return 0
+  fi
+
+  for video_path in "${videos[@]}"; do
+    video_file="$(basename "${video_path}")"
+    camera_name="${video_file%-images-rgb.mp4}"
+    sample_name="${date_name}_${episode_name}_${camera_name}"
+    out_video="${VIDEOS_DIR}/${sample_name}.mp4"
+    out_meta="${METAS_DIR}/${sample_name}.txt"
+
+    echo "[${index}/${total_metas}] Writing ${sample_name}.mp4 from ${video_path}"
+
+    if write_video "${video_path}" "${out_video}"; then
+      printf "%s\n" "${instruction}" > "${out_meta}"
+      created_count=$((created_count + 1))
+    else
+      skipped_count=$((skipped_count + 1))
+    fi
+  done
+
+  printf "%s %s %s %s\n" "${created_count}" "${skipped_count}" "${missing_videos_count}" "${missing_instruction_count}" > "${STATUS_DIR}/${index}.status"
 }
 
 calculate_video_seconds() {
@@ -294,51 +372,30 @@ print(":".join([str(total_seconds), str(failed), "mp4-header", *percentiles]))
 PYMP4
 }
 
-while IFS= read -r -d '' meta_path <&3; do
-  processed_metas=$((processed_metas + 1))
-  episode_dir="$(dirname "${meta_path}")"
-  episode_name="$(basename "${episode_dir}")"
-  date_name="$(basename "$(dirname "${episode_dir}")")"
-
-  if ! instruction="$(extract_instruction "${meta_path}")"; then
-    echo "Skipping ${episode_dir}: failed to parse session_meta.json" >&2
-    missing_instruction=$((missing_instruction + 1))
-    continue
-  fi
-
-  if [[ -z "${instruction}" ]]; then
-    echo "Skipping ${episode_dir}: no instruction in session_meta.json" >&2
-    missing_instruction=$((missing_instruction + 1))
-    continue
-  fi
-
-  shopt -s nullglob
-  videos=("${episode_dir}"/${CAMERA_GLOB})
-  shopt -u nullglob
-
-  if (( ${#videos[@]} == 0 )); then
-    echo "Skipping ${episode_dir}: no videos matching ${CAMERA_GLOB}" >&2
-    missing_videos=$((missing_videos + 1))
-    continue
-  fi
-
-  for video_path in "${videos[@]}"; do
-    video_file="$(basename "${video_path}")"
-    camera_name="${video_file%-images-rgb.mp4}"
-    sample_name="${date_name}_${episode_name}_${camera_name}"
-    out_video="${VIDEOS_DIR}/${sample_name}.mp4"
-    out_meta="${METAS_DIR}/${sample_name}.txt"
-
-    echo "[${processed_metas}/${total_metas}] Writing ${sample_name}.mp4 from ${video_path}"
-
-    if write_video "${video_path}" "${out_video}"; then
-      printf "%s\n" "${instruction}" > "${out_meta}"
-      created=$((created + 1))
-    else
-      skipped=$((skipped + 1))
-    fi
+if (( WORKERS == 1 )); then
+  for index in "${!META_PATHS[@]}"; do
+    process_meta "$((index + 1))" "${META_PATHS[$index]}"
   done
-done 3< <(find "${RAW_ROOT}" -mindepth 3 -maxdepth 3 -type f -name session_meta.json -print0 | sort -z)
+else
+  export RAW_ROOT OUT_ROOT MODE CAMERA_GLOB OVERWRITE TARGET_FPS VIDEO_ENCODER FFMPEG_BIN VIDEO_CRF NVENC_CQ NVENC_PRESET FFMPEG_LOGLEVEL
+  export VIDEOS_DIR METAS_DIR STATUS_DIR total_metas
+  export -f extract_instruction resolve_video_encoder write_video process_meta
+
+  if (( total_metas > 0 )); then
+    for index in "${!META_PATHS[@]}"; do
+      printf "%s\0%s\0" "$((index + 1))" "${META_PATHS[$index]}"
+    done | xargs -0 -n 2 -P "${WORKERS}" bash -euo pipefail -c 'process_meta "$1" "$2"' _
+  fi
+fi
+
+for status_file in "${STATUS_DIR}"/*.status; do
+  [[ -e "${status_file}" ]] || continue
+  read -r created_count skipped_count missing_videos_count missing_instruction_count < "${status_file}"
+  created=$((created + created_count))
+  skipped=$((skipped + skipped_count))
+  missing_videos=$((missing_videos + missing_videos_count))
+  missing_instruction=$((missing_instruction + missing_instruction_count))
+done
 
 duration_summary="$(calculate_video_seconds)"
 video_minutes="unknown"
@@ -358,6 +415,7 @@ echo "  mode:            ${MODE}"
 echo "  target fps:      ${TARGET_FPS:-native}"
 echo "  encoder:         ${VIDEO_ENCODER}"
 echo "  camera glob:     ${CAMERA_GLOB}"
+echo "  workers:         ${WORKERS}"
 echo "  created:         ${created}"
 echo "  skipped:         ${skipped}"
 echo "  no videos:       ${missing_videos}"

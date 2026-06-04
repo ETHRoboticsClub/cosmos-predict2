@@ -81,8 +81,9 @@ class EveryNDrawSample(EveryN):
         use_negative_prompt: bool = False,
         show_all_frames: bool = False,
         fps: int = 16,
+        run_at_start: bool = False,
     ):
-        super().__init__(every_n, step_size)
+        super().__init__(every_n, step_size, run_at_start=run_at_start)
         self.fix_batch = fix_batch_fp
         self.n_x0_level = n_x0_level
         self.n_viz_sample = n_viz_sample

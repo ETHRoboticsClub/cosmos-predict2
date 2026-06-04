@@ -17,6 +17,8 @@ from hydra.core.config_store import ConfigStore
 from megatron.core import parallel_state
 from torch.utils.data import DataLoader, DistributedSampler
 
+from cosmos_predict2.callbacks.every_n_draw_sample import EveryNDrawSample
+from cosmos_predict2.callbacks.wandb_setup import WandbSetup
 from cosmos_predict2.data.dataset_video import Dataset
 from imaginaire.lazy_config import LazyCall as L
 
@@ -46,6 +48,16 @@ dataloader_train_cosmos_nemo_assets = L(DataLoader)(
     num_workers=8,
     pin_memory=True,
 )
+dataloader_val_cosmos_nemo_assets = L(DataLoader)(
+    dataset=example_video_dataset_cosmos_nemo_assets,
+    sampler=L(get_sampler)(dataset=example_video_dataset_cosmos_nemo_assets),
+    batch_size=1,
+    drop_last=True,
+    num_workers=4,
+    pin_memory=True,
+)
+_VIZ_EVERY_N = 200
+
 # torchrun --nproc_per_node=8 --master_port=12341 -m scripts.train --config=cosmos_predict2/configs/base/config.py -- experiment=predict2_video2world_lora_training_2b_cosmos_nemo_assets model.config.train_architecture=lora
 predict2_video2world_lora_training_2b_cosmos_nemo_assets = dict(
     defaults=[
@@ -53,7 +65,6 @@ predict2_video2world_lora_training_2b_cosmos_nemo_assets = dict(
         {"override /optimizer": "fusedadamw"},
         {"override /scheduler": "lambdalinear"},
         {"override /ckpt_type": "standard"},
-        {"override /dataloader_val": "mock"},
         "_self_",
     ],
     job=dict(
@@ -81,12 +92,29 @@ predict2_video2world_lora_training_2b_cosmos_nemo_assets = dict(
         context_parallel_size=2,
     ),
     dataloader_train=dataloader_train_cosmos_nemo_assets,
+    dataloader_val=dataloader_val_cosmos_nemo_assets,
     trainer=dict(
         distributed_parallelism="fsdp",
         callbacks=dict(
             iter_speed=dict(hit_thres=10),
+            wandb_setup=L(WandbSetup)(),
+            draw_sample=L(EveryNDrawSample)(
+                every_n=_VIZ_EVERY_N,
+                is_x0=True,
+                is_sample=True,
+                is_ema=True,
+                n_x0_level=2,
+                n_viz_sample=1,
+                num_sampling_step=35,
+                guidance=[3.0],
+                show_all_frames=False,
+                fps=10,
+            ),
         ),
-        max_iter=1000,
+        max_iter=10_000,
+        run_validation=True,
+        validation_iter=_VIZ_EVERY_N,
+        max_val_iter=1,
     ),
     checkpoint=dict(
         save_iter=200,
@@ -140,6 +168,7 @@ predict2_video2world_lora_training_14b_cosmos_nemo_assets = dict(
         distributed_parallelism="fsdp",
         callbacks=dict(
             iter_speed=dict(hit_thres=10),
+            wandb_setup=L(WandbSetup)(),
         ),
         max_iter=1000,  # Use same as working config
     ),

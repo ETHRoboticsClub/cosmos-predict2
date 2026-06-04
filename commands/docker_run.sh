@@ -15,7 +15,7 @@ docker run -it --runtime=nvidia --ipc=host --rm \
   -v /workspace/.venv \
   -v "$ROOT_CACHE:/root/.cache" \
   -v "$HF_HOME:$HF_HOME" \
-  -v /opt/dlami/nvme:/opt/dlami/nvme \
+  -v /nvme:/nvme \
   -e HF_TOKEN="$HF_TOKEN" \
   -e HF_HOME="$HF_HOME" \
   -e WANDB_API_KEY="$WANDB_API_KEY" \
