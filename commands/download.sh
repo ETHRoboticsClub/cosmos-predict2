@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 S3_URI="${S3_URI:-s3://ethrc-ml-data-916780037007/robot-learning/teleop/}"
 OUTPUT_DIR="${OUTPUT_DIR:-/nvme/datasets/teleop/raw}"
+S3_REGION="${S3_REGION:-us-east-1}"
 
 cd "${REPO_ROOT}"
 source ".env.secrets"
@@ -17,7 +18,7 @@ if ! command -v aws >/dev/null 2>&1; then
   exit 2
 fi
 
-aws s3 sync "${S3_URI}" "${OUTPUT_DIR}" "$@"
+aws --region "${S3_REGION}" s3 sync "${S3_URI}" "${OUTPUT_DIR}" "$@"
 
 
 # HF_OUTPUT_DIR="${HF_OUTPUT_DIR:-${OUTPUT_DIR}}"
