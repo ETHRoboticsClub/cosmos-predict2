@@ -254,6 +254,7 @@ dependencies = [
     { name = "decord", marker = "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "diffusers", marker = "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "einops", marker = "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "ffmpegcv", marker = "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "ftfy", marker = "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "fvcore", marker = "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "h11", marker = "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -323,6 +324,7 @@ requires-dist = [
     { name = "decord", specifier = "==0.6.0" },
     { name = "diffusers", specifier = "==0.33.1" },
     { name = "einops", specifier = "==0.8.1" },
+    { name = "ffmpegcv", specifier = "==0.3.18" },
     { name = "flash-attn", marker = "extra == 'cu126'", specifier = "==2.6.3", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/cu126_torch260/simple", conflict = { package = "cosmos-predict2", extra = "cu126" } },
     { name = "ftfy", specifier = "==6.3.1" },
     { name = "fvcore", specifier = "==0.1.5.post20221221" },
@@ -489,6 +491,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5f/d4/e834d929be54bfadb1f3e3b931c38e956aaa3b235a46a3c764c26c774902/fasteners-0.19.tar.gz", hash = "sha256:b4f37c3ac52d8a445af3a66bce57b33b5e90b97c696b7b984f530cf8f0ded09c", size = 24832, upload-time = "2023-09-19T17:11:20.228Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/61/bf/fd60001b3abc5222d8eaa4a204cd8c0ae78e75adc688f33ce4bf25b7fafa/fasteners-0.19-py3-none-any.whl", hash = "sha256:758819cb5d94cdedf4e836988b74de396ceacb8e2794d21f82d131fd9ee77237", size = 18679, upload-time = "2023-09-19T17:11:18.725Z" },
+]
+
+[[package]]
+name = "ffmpegcv"
+version = "0.3.18"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", marker = "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/42/a4/fd0f0f5bb3d9c82f2bff0a65681a41be69e7c78570754950454226ee6b43/ffmpegcv-0.3.18.tar.gz", hash = "sha256:ba65969ae41c66dad30bda12e06ee595c7737ce88364c41662321566b228df6f", size = 30341, upload-time = "2025-04-15T13:50:10.62Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/91/e372814132b796045caedfba5b7c6abf7f555019df3860d15aa9bb51bd27/ffmpegcv-0.3.18-py3-none-any.whl", hash = "sha256:e6c46db914750c0bf99fd517e54b7ada0626dd337f30ebdf5eec77279301ea48", size = 32610, upload-time = "2025-04-15T13:50:09.312Z" },
 ]
 
 [[package]]

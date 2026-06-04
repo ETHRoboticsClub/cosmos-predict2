@@ -231,6 +231,7 @@ class EveryNDrawSample(EveryN):
 
         dist.barrier()
         if wandb.run:
+            info = self._with_panel_aliases(info, tag)
             wandb.log(info, step=iteration)
         torch.cuda.empty_cache()
 
@@ -372,6 +373,7 @@ class EveryNDrawSample(EveryN):
             if self.is_sample and sample_img_fp is not None:
                 info[f"{self.name}/{tag}_sample"] = self._to_wandb_media(sample_img_fp, caption=str(sample_counter))
 
+            info = self._with_panel_aliases(info, tag)
             wandb.log(
                 info,
                 step=iteration,
@@ -437,6 +439,17 @@ class EveryNDrawSample(EveryN):
         if media.endswith(".mp4"):
             return wandb.Video(media, fps=self.fps, format="mp4")
         return wandb.Image(media, caption=caption)
+
+    def _with_panel_aliases(self, info: dict, tag: str) -> dict:
+        """Duplicate media keys to flat aliases so W&B auto-panels pick them up reliably."""
+        sample_key = f"{self.name}/{tag}_sample"
+        x0_key = f"{self.name}/{tag}_x0"
+
+        if sample_key in info and info[sample_key] is not None:
+            info[f"media_{tag}_sample"] = info[sample_key]
+        if x0_key in info and info[x0_key] is not None:
+            info[f"media_{tag}_x0"] = info[x0_key]
+        return info
 
     def run_save(self, to_show, batch_size, base_fp_wo_ext) -> str | np.ndarray | None:
         to_show = (1.0 + torch.stack(to_show, dim=0).clamp(-1, 1)) / 2.0  # [n, b, c, t, h, w]

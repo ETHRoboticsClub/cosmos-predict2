@@ -11,7 +11,7 @@ OUT_ROOT="${OUT_ROOT:-/nvme/datasets/teleop/preprocessed}"
 MODE="${MODE:-symlink}"
 CAMERA_GLOB="${CAMERA_GLOB:-camera_top-images-rgb.mp4}"
 OVERWRITE="${OVERWRITE:-1}"
-TARGET_FPS="${TARGET_FPS-16}"
+TARGET_FPS="${TARGET_FPS-10}"
 VIDEO_ENCODER="${VIDEO_ENCODER:-auto}"
 FFMPEG_BIN="${FFMPEG_BIN:-ffmpeg}"
 VIDEO_CRF="${VIDEO_CRF:-18}"
@@ -64,6 +64,7 @@ echo "  raw root:        ${RAW_ROOT}"
 echo "  output root:     ${OUT_ROOT}"
 echo "  mode:            ${MODE}"
 echo "  target fps:      ${TARGET_FPS:-native}"
+echo "  encoder:         ${VIDEO_ENCODER}"
 echo "  ffmpeg loglevel: ${FFMPEG_LOGLEVEL}"
 echo "  camera glob:     ${CAMERA_GLOB}"
 echo "  workers:         ${WORKERS}"
@@ -99,13 +100,24 @@ if instruction:
 PY
 }
 
+nvenc_available() {
+  if ! "${FFMPEG_BIN}" -hide_banner -encoders 2>/dev/null | grep -q "h264_nvenc"; then
+    return 1
+  fi
+
+  "${FFMPEG_BIN}" -hide_banner -loglevel error -y \
+    -f lavfi -i "color=size=16x16:rate=1:duration=1" \
+    -frames:v 1 -an -c:v h264_nvenc -preset "${NVENC_PRESET}" -cq "${NVENC_CQ}" -b:v 0 \
+    -f null - >/dev/null 2>&1
+}
+
 resolve_video_encoder() {
   if [[ "${VIDEO_ENCODER}" != "auto" ]]; then
     echo "${VIDEO_ENCODER}"
     return 0
   fi
 
-  if "${FFMPEG_BIN}" -hide_banner -encoders 2>/dev/null | grep -q "h264_nvenc"; then
+  if nvenc_available; then
     echo "h264_nvenc"
   else
     echo "libx264"
@@ -134,7 +146,7 @@ write_video() {
     local encoder
     local tmp_dst
     local -a encode_args
-    encoder="$(resolve_video_encoder)"
+    encoder="${RESOLVED_VIDEO_ENCODER:-$(resolve_video_encoder)}"
     tmp_dst="${dst%.mp4}.tmp.$$.mp4"
 
     if [[ "${encoder}" == "h264_nvenc" ]]; then
@@ -372,14 +384,26 @@ print(":".join([str(total_seconds), str(failed), "mp4-header", *percentiles]))
 PYMP4
 }
 
+RESOLVED_VIDEO_ENCODER="${VIDEO_ENCODER}"
+if [[ -n "${TARGET_FPS}" ]]; then
+  if ! command -v "${FFMPEG_BIN}" >/dev/null 2>&1; then
+    echo "TARGET_FPS=${TARGET_FPS}, but '${FFMPEG_BIN}' was not found." >&2
+    echo "Install ffmpeg on the preprocessing node/container, or run TARGET_FPS= to disable downsampling." >&2
+    exit 2
+  fi
+
+  RESOLVED_VIDEO_ENCODER="$(resolve_video_encoder)"
+  echo "Resolved video encoder: ${RESOLVED_VIDEO_ENCODER}"
+fi
+
 if (( WORKERS == 1 )); then
   for index in "${!META_PATHS[@]}"; do
     process_meta "$((index + 1))" "${META_PATHS[$index]}"
   done
 else
-  export RAW_ROOT OUT_ROOT MODE CAMERA_GLOB OVERWRITE TARGET_FPS VIDEO_ENCODER FFMPEG_BIN VIDEO_CRF NVENC_CQ NVENC_PRESET FFMPEG_LOGLEVEL
+  export RAW_ROOT OUT_ROOT MODE CAMERA_GLOB OVERWRITE TARGET_FPS VIDEO_ENCODER RESOLVED_VIDEO_ENCODER FFMPEG_BIN VIDEO_CRF NVENC_CQ NVENC_PRESET FFMPEG_LOGLEVEL
   export VIDEOS_DIR METAS_DIR STATUS_DIR total_metas
-  export -f extract_instruction resolve_video_encoder write_video process_meta
+  export -f extract_instruction nvenc_available resolve_video_encoder write_video process_meta
 
   if (( total_metas > 0 )); then
     for index in "${!META_PATHS[@]}"; do
@@ -413,7 +437,7 @@ echo "  raw root:        ${RAW_ROOT}"
 echo "  output root:     ${OUT_ROOT}"
 echo "  mode:            ${MODE}"
 echo "  target fps:      ${TARGET_FPS:-native}"
-echo "  encoder:         ${VIDEO_ENCODER}"
+echo "  encoder:         ${RESOLVED_VIDEO_ENCODER}"
 echo "  camera glob:     ${CAMERA_GLOB}"
 echo "  workers:         ${WORKERS}"
 echo "  created:         ${created}"

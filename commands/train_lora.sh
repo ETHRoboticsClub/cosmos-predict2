@@ -10,20 +10,55 @@ source "${REPO_ROOT}/.env.paths"
 DATASET_PATH="${DATASET_PATH:-/nvme/datasets/teleop/preprocessed}"
 NUM_FRAMES="${NUM_FRAMES:-61}"
 LATENT_FRAMES="${LATENT_FRAMES:-16}"
-BATCH_SIZE="${BATCH_SIZE:-32}"
+BATCH_SIZE="${BATCH_SIZE:-8}"
 VIDEO_HEIGHT="${VIDEO_HEIGHT:-480}"
 VIDEO_WIDTH="${VIDEO_WIDTH:-640}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-/nvme/checkpoints}"
 
-TRAIN_WORKERS="${TRAIN_WORKERS:-32}"
-VAL_WORKERS="${VAL_WORKERS:-8}"
+TRAIN_WORKERS="${TRAIN_WORKERS:-4}"
 HELDOUT_VIDEO_INDEX="${HELDOUT_VIDEO_INDEX:-0}"
 HELDOUT_START_INDICES="${HELDOUT_START_INDICES:-[0,16,32]}"
+ENABLE_WANDB_VIDEO_SAMPLING="${ENABLE_WANDB_VIDEO_SAMPLING:-1}"
+DRAW_SAMPLE_EVERY="${DRAW_SAMPLE_EVERY:-100}"
+DISABLE_TORCH_COMPILE="${DISABLE_TORCH_COMPILE:-1}"
+MAX_ITER="${MAX_ITER:-10000}"
+
+# Disabled branch
+DRAW_SAMPLE_ARGS=(
+  trainer.callbacks.draw_sample.is_ema=False
+  trainer.callbacks.draw_sample.is_x0=False
+  trainer.callbacks.draw_sample.is_sample=False
+  trainer.callbacks.draw_sample.run_at_start=False
+  trainer.callbacks.draw_sample.every_n="${DRAW_SAMPLE_EVERY}"
+)
+
+# Enabled branch
+if [[ "${ENABLE_WANDB_VIDEO_SAMPLING}" == "1" ]]; then
+  DRAW_SAMPLE_ARGS=(
+    trainer.callbacks.draw_sample.is_ema=False
+    trainer.callbacks.draw_sample.is_x0=False
+    trainer.callbacks.draw_sample.is_sample=True
+    trainer.callbacks.draw_sample.show_all_frames=True
+    trainer.callbacks.draw_sample.n_viz_sample=3
+    trainer.callbacks.draw_sample.fixed_sample_video_index="${HELDOUT_VIDEO_INDEX}"
+    trainer.callbacks.draw_sample.fixed_sample_start_indices="${HELDOUT_START_INDICES}"
+    trainer.callbacks.draw_sample.fixed_sample_dataset_dir="${DATASET_PATH}"
+    trainer.callbacks.draw_sample.fixed_sample_num_frames="${NUM_FRAMES}"
+    trainer.callbacks.draw_sample.fixed_sample_video_size="[${VIDEO_HEIGHT},${VIDEO_WIDTH}]"
+    trainer.callbacks.draw_sample.fps=10
+    trainer.callbacks.draw_sample.run_at_start=True
+    trainer.callbacks.draw_sample.every_n="${DRAW_SAMPLE_EVERY}"
+  )
+fi
 
 
 export COSMOS_PREDICT2_ARGS="${COSMOS_PREDICT2_ARGS:---checkpoints ${CHECKPOINT_DIR}}"
 export WANDB_ENTITY="${WANDB_ENTITY:-eth-robotics-club}"
 export WANDB_PROJECT="${WANDB_PROJECT:-cosmos2-video}"
+if [[ "${DISABLE_TORCH_COMPILE}" == "1" ]]; then
+  export TORCH_COMPILE_DISABLE=1
+  export TORCHDYNAMO_DISABLE=1
+fi
 
 cd "${REPO_ROOT}"
 
@@ -59,19 +94,9 @@ torchrun --nproc_per_node=8 --master_port=12341 -m scripts.train \
   model_parallel.context_parallel_size=1 \
   dataloader_train.num_workers="${TRAIN_WORKERS}" \
   trainer.run_validation=False \
-  trainer.callbacks.draw_sample.is_ema=False \
-  trainer.callbacks.draw_sample.is_x0=False \
-  trainer.callbacks.draw_sample.is_sample=True \
-  trainer.callbacks.draw_sample.show_all_frames=True \
-  trainer.callbacks.draw_sample.n_viz_sample=3 \
-  trainer.callbacks.draw_sample.fixed_sample_video_index="${HELDOUT_VIDEO_INDEX}" \
-  trainer.callbacks.draw_sample.fixed_sample_start_indices="${HELDOUT_START_INDICES}" \
-  trainer.callbacks.draw_sample.fixed_sample_dataset_dir="${DATASET_PATH}" \
-  trainer.callbacks.draw_sample.fixed_sample_num_frames="${NUM_FRAMES}" \
-  trainer.callbacks.draw_sample.fixed_sample_video_size="[${VIDEO_HEIGHT},${VIDEO_WIDTH}]" \
-  trainer.callbacks.draw_sample.run_at_start=True \
-  scheduler.cycle_lengths="[10000]" \
-  trainer.callbacks.draw_sample.every_n=100 \
+  "${DRAW_SAMPLE_ARGS[@]}" \
+  trainer.max_iter="${MAX_ITER}" \
+  scheduler.cycle_lengths="[${MAX_ITER}]" \
   trainer.logging_iter=10
   # dataloader_val.num_workers="${VAL_WORKERS}" \
 

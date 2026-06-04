@@ -16,7 +16,6 @@
 import argparse
 import os
 import pickle
-import shutil
 
 from imaginaire.constants import T5_MODEL_DIR
 
@@ -62,42 +61,36 @@ def main(args) -> None:
     encoder_config = CosmosT5TextEncoderConfig(ckpt_path=args.cache_dir)
     encoder = CosmosT5TextEncoder(config=encoder_config)
 
-    prompt_to_t5_path = {}
+    prompt_to_embedding = {}
     for meta_filename in metas_list:
         t5_xxl_filename = os.path.join(t5_xxl_dir, os.path.basename(meta_filename).replace(".txt", ".pickle"))
         with open(meta_filename) as fp:
             prompt = fp.read().strip()
 
         if os.path.exists(t5_xxl_filename):
-            prompt_to_t5_path.setdefault(prompt, t5_xxl_filename)
-            # Skip if the file already exists
+            prompt_to_embedding.setdefault(prompt, None)
             continue
 
-        if prompt in prompt_to_t5_path:
-            try:
-                os.link(prompt_to_t5_path[prompt], t5_xxl_filename)
-            except OSError:
-                shutil.copy2(prompt_to_t5_path[prompt], t5_xxl_filename)
-            continue
+        encoded_text = prompt_to_embedding.get(prompt)
+        if encoded_text is None:
+            # Compute once per unique prompt, then write a real file for every sample.
+            encoded_text_raw, mask_bool = encoder.encode_prompts(
+                prompt, max_length=args.max_length, return_mask=True
+            )  # list of np.ndarray in (len, embed_dim)
+            attn_mask = mask_bool.long()
+            lengths = attn_mask.sum(dim=1).cpu()
 
-        # Compute T5 embeddings
-        encoded_text, mask_bool = encoder.encode_prompts(
-            prompt, max_length=args.max_length, return_mask=True
-        )  # list of np.ndarray in (len, embed_dim)
-        attn_mask = mask_bool.long()
-        lengths = attn_mask.sum(dim=1).cpu()
+            encoded_text_np = encoded_text_raw.cpu().numpy().astype(np.float16)
 
-        encoded_text = encoded_text.cpu().numpy().astype(np.float16)
+            # trim zeros to save space
+            encoded_text = [encoded_text_np[batch_id][: lengths[batch_id]] for batch_id in range(encoded_text_np.shape[0])]
+            prompt_to_embedding[prompt] = encoded_text
 
-        # trim zeros to save space
-        encoded_text = [encoded_text[batch_id][: lengths[batch_id]] for batch_id in range(encoded_text.shape[0])]
-
-        # Save T5 embeddings as pickle file
+        # Save T5 embeddings as pickle file (no hardlink/symlink).
         with open(t5_xxl_filename, "wb") as fp:
             pickle.dump(encoded_text, fp)
-        prompt_to_t5_path[prompt] = t5_xxl_filename
 
-    print(f"Prepared {len(metas_list)} embedding files from {len(prompt_to_t5_path)} unique prompts.")
+    print(f"Prepared {len(metas_list)} embedding files from {len(prompt_to_embedding)} unique prompts.")
 
 
 if __name__ == "__main__":
