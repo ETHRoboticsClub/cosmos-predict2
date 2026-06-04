@@ -10,7 +10,7 @@ source "${REPO_ROOT}/.env.paths"
 DATASET_PATH="${DATASET_PATH:-/nvme/datasets/teleop/preprocessed}"
 NUM_FRAMES="${NUM_FRAMES:-61}"
 LATENT_FRAMES="${LATENT_FRAMES:-16}"
-BATCH_SIZE="${BATCH_SIZE:-3}"
+BATCH_SIZE="${BATCH_SIZE:-32}"
 VIDEO_HEIGHT="${VIDEO_HEIGHT:-480}"
 VIDEO_WIDTH="${VIDEO_WIDTH:-640}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-/nvme/checkpoints}"
@@ -70,8 +70,9 @@ torchrun --nproc_per_node=8 --master_port=12341 -m scripts.train \
   trainer.callbacks.draw_sample.fixed_sample_num_frames="${NUM_FRAMES}" \
   trainer.callbacks.draw_sample.fixed_sample_video_size="[${VIDEO_HEIGHT},${VIDEO_WIDTH}]" \
   trainer.callbacks.draw_sample.run_at_start=True \
-  trainer.logging_iter=10 \
-  scheduler.cycle_lengths="[10000]"
+  scheduler.cycle_lengths="[10000]" \
+  trainer.callbacks.draw_sample.every_n=100 \
+  trainer.logging_iter=10
   # dataloader_val.num_workers="${VAL_WORKERS}" \
 
 # Params copied from cosmos-predict2.5/commands/train.sh. Uncomment and adapt as needed.
